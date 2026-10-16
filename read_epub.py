@@ -75,7 +75,7 @@ def main():
     parser.add_argument("epub", nargs="?", type=Path, help="path to your EPUB")
     parser.add_argument("--voice", default="en-US-AriaNeural", help="online voice name")
     parser.add_argument("--rate", type=int, default=0, help="speed change in percent, e.g. 15 or -10")
-    parser.add_argument("--chapter", type=int, default=1, help="start at this section (1-based)")
+    parser.add_argument("--chapter", type=int, help="start at this section (1-based); overrides saved position with --follow")
     parser.add_argument("--list-chapters", action="store_true", help="show section numbers and exit")
     parser.add_argument("--list-voices", nargs="?", const="", metavar="LANGUAGE",
                         help="list online voices, optionally filtered by en, de, etc.")
@@ -97,6 +97,8 @@ def main():
         from follow_reader import run_follow
         run_follow(args.epub, args.voice, args.rate, args.chapter)
         return 0
+    if args.chapter is None:
+        args.chapter = 1
     if args.epub is None:
         parser.error("provide an EPUB path, or use --list-voices")
     if not args.epub.is_file():

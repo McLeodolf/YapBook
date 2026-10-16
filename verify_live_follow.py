@@ -48,7 +48,9 @@ try:
     window._show_chapter()
     window.volume_slider.set(0)
     window._set_state('loading')
-    window.results.put((window.generation, (audio, cues), None))
+    window.waiting_for = (0, 0)
+    window.audio_requested.add((0, 0))
+    window.results.put((window.generation, (0, 0), (audio, cues), None))
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline and window.highlighted is None:
         root.update()

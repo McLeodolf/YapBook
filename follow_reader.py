@@ -2,6 +2,7 @@
 
 import asyncio
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 import queue
 import re
@@ -16,6 +17,7 @@ import edge_tts
 from read_epub import speech_chunks
 from epub_document import EpubDocument, read_document
 from html_reader import HtmlBookView
+from reading_positions import PositionStore, book_fingerprint
 from windows_audio import WindowsAudio
 
 
@@ -107,9 +109,24 @@ async def generate_audio(text, voice, rate, cancelled):
     return bytes(audio), align_sentences(text, events)
 
 
+def text_parts(text, start_char=0):
+    cursor = start_char
+    for chunk in speech_chunks(text[start_char:]):
+        start = text.find(chunk, cursor)
+        if start < 0:
+            raise ValueError("The reading section could not be located in the book text.")
+        yield start, chunk
+        cursor = start + len(chunk)
+
+
 class ReadingWindow:
-    def __init__(self, root, voice="en-US-AriaNeural", rate=0):
+    def __init__(self, root, voice="en-US-AriaNeural", rate=0, position_store=None):
         self.root = root
+        self.position_store = position_store if position_store is not None else PositionStore()
+        self.book_id = None
+        self.reading_position = None
+        self.saved_position = None
+        self.position_warning_shown = False
         self.player = WindowsAudio()
         self.chapters = []
         self.section = 0
@@ -122,12 +139,17 @@ class ReadingWindow:
         self.generation = 0
         self.cancelled = threading.Event()
         self.results = queue.Queue()
+        self.audio_jobs = None
+        self.audio_cache = {}
+        self.audio_requested = set()
+        self.waiting_for = None
         self.voice_results = queue.Queue()
         self.all_voices = ["en-US-AriaNeural", "en-US-GuyNeural", "de-DE-KatjaNeural", "de-DE-ConradNeural"]
         self.closed = False
         self.font_size = 20
         self.voice = tk.StringVar(root, voice)
-        self.rate = tk.StringVar(root, str(rate))
+        self.rate = tk.DoubleVar(root, rate)
+        self.rate_label = tk.StringVar(root, f"{rate:+d}%")
         self.volume = tk.DoubleVar(root, 100)
         self.volume_label = tk.StringVar(root, "100%")
         self.follow = tk.BooleanVar(root, True)
@@ -178,19 +200,17 @@ class ReadingWindow:
 
         options = ttk.Frame(layout)
         options.pack(fill="x", pady=(0, 10))
-        ttk.Label(options, text="Speed (%):").pack(side="left", padx=(0, 6))
-        self.speed_box = ttk.Spinbox(options, from_=-50, to=100, width=5, textvariable=self.rate)
-        self.speed_box.pack(side="left")
-        ttk.Label(options, text="0 = normal · − slower · + faster").pack(side="left", padx=8)
-
-        audio_controls = ttk.Frame(layout)
-        audio_controls.pack(fill="x", pady=(0, 10))
-        ttk.Label(audio_controls, text="Volume:").pack(side="left", padx=(0, 6))
-        self.volume_slider = ttk.Scale(audio_controls, from_=0, to=100, variable=self.volume,
-                                       command=self._volume_changed)
-        self.volume_slider.pack(side="left", fill="x", expand=True)
-        ttk.Label(audio_controls, textvariable=self.volume_label, width=5, anchor="e").pack(side="left", padx=8)
-        ttk.Checkbutton(audio_controls, text="Auto-scroll while reading", variable=self.follow,
+        ttk.Label(options, text="Speed:").pack(side="left", padx=(0, 6))
+        self.speed_slider = ttk.Scale(options, from_=-50, to=100, length=110,
+                                      variable=self.rate, command=self._rate_changed)
+        self.speed_slider.pack(side="left")
+        ttk.Label(options, textvariable=self.rate_label, width=5, anchor="e").pack(side="left", padx=(4, 20))
+        ttk.Label(options, text="Volume:").pack(side="left", padx=(0, 6))
+        self.volume_slider = ttk.Scale(options, from_=0, to=100, length=110,
+                                       variable=self.volume, command=self._volume_changed)
+        self.volume_slider.pack(side="left")
+        ttk.Label(options, textvariable=self.volume_label, width=5, anchor="e").pack(side="left", padx=(4, 8))
+        ttk.Checkbutton(options, text="Auto-scroll while reading", variable=self.follow,
                         command=self._follow_changed).pack(side="right")
 
         chapters = ttk.Frame(layout)
@@ -207,7 +227,7 @@ class ReadingWindow:
         self.reader.html.bind("<space>", self._space, add="+")
         self.reader.html.bind("<ButtonRelease-1>", self.click_sentence, add="+")
         ttk.Label(layout, textvariable=self.status, wraplength=900).pack(fill="x", pady=(12, 4))
-        ttk.Label(layout, text="Online voice: text read aloud is sent to Microsoft.").pack(fill="x")
+        ttk.Label(layout, text="Online voice: current and upcoming text is sent to Microsoft.").pack(fill="x")
 
     def _filter_voices(self, _event=None):
         query = self.voice.get().casefold()
@@ -271,6 +291,9 @@ class ReadingWindow:
             self.reader.highlight(self.section, self.highlighted)
         self._follow_changed()
 
+    def _rate_changed(self, _value=None):
+        self.rate_label.set(f"{round(self.rate.get()):+d}%")
+
     def _volume_changed(self, _value=None):
         percent = round(self.volume.get())
         self.volume_label.set(f"{percent}%")
@@ -296,22 +319,35 @@ class ReadingWindow:
         if path:
             self.load_book(path)
 
-    def load_book(self, path, chapter=1):
+    def load_book(self, path, chapter=None):
         self.stop()
         try:
+            book_id = book_fingerprint(path)
             document = read_document(Path(path))
-            if not 1 <= chapter <= len(document.sections):
+            if chapter is not None and not 1 <= chapter <= len(document.sections):
                 raise ValueError("This section number does not exist in this book.")
             chapters = self.reader.set_document(document)
         except Exception:
             messagebox.showerror("Open book", "The EPUB could not be read, or the section number is invalid.", parent=self.root)
             return
         self.chapters = chapters
+        self.book_id = book_id
+        self.saved_position = None
+        self.position_warning_shown = False
         self.book_title.set(Path(path).stem)
         self.root.title(f"{Path(path).stem} · YapBook")
         self.chapter_box.configure(values=[f"{i}. {title}" for i, (title, _) in enumerate(chapters, 1)])
-        self.section = chapter - 1
+        position = self.position_store.get(book_id, chapters) if chapter is None else None
+        self.section = position[0] if position is not None else (chapter or 1) - 1
         self._show_chapter()
+        if position is not None:
+            _, start, end = position
+            self._prepare_parts(start)
+            if end > start:
+                self._highlight((start, end))
+            self.reader.scroll_to(self.section, start)
+            self.saved_position = position
+            self.status.set(f"Saved position restored · Section {self.section + 1}/{len(chapters)} · Select Start reading to continue.")
 
     def _show_chapter(self, scroll=True):
         if self.reader.model is None:
@@ -322,19 +358,13 @@ class ReadingWindow:
         if scroll:
             self.reader.scroll_to(self.section)
         self._prepare_parts()
+        first = next(sentence_spans(self.chapters[self.section][1]), (0, 0))
+        self.reading_position = (self.section, *first)
         self.highlighted = None
         self.status.set(f"Section {self.section + 1}/{len(self.chapters)} · {title} · Click a sentence to read from there.")
 
     def _prepare_parts(self, start_char=0):
-        text = self.chapters[self.section][1]
-        self.parts = []
-        cursor = start_char
-        for chunk in speech_chunks(text[start_char:]):
-            start = text.find(chunk, cursor)
-            if start < 0:
-                raise ValueError("The reading section could not be located in the book text.")
-            self.parts.append((start, chunk))
-            cursor = start + len(chunk)
+        self.parts = list(text_parts(self.chapters[self.section][1], start_char))
         self.part = 0
 
     def select_chapter(self, _event=None):
@@ -349,7 +379,7 @@ class ReadingWindow:
         self.play_button.configure(text={"idle": "Start reading", "loading": "Preparing audio …",
                                          "playing": "Pause", "paused": "Resume"}[state],
                                    state="disabled" if state == "loading" else "normal")
-        for widget in (self.voice_box, self.speed_box):
+        for widget in (self.voice_box, self.speed_slider):
             widget.configure(state="normal" if state == "idle" else "disabled")
 
     def toggle_play(self):
@@ -357,6 +387,7 @@ class ReadingWindow:
             if self.state == "playing":
                 self.player.pause()
                 self._set_state("paused")
+                self._save_position()
                 self.status.set("Paused · Select Resume to continue from here.")
             elif self.state == "paused":
                 self.player.resume()
@@ -367,7 +398,7 @@ class ReadingWindow:
                     self.choose_book()
                     return
                 try:
-                    rate = int(self.rate.get())
+                    rate = round(self.rate.get())
                 except ValueError:
                     rate = 999
                 if not -50 <= rate <= 100 or not self.voice.get().strip():
@@ -381,27 +412,86 @@ class ReadingWindow:
             self._error(str(exc))
 
     def _request_part(self):
+        start, text = self.parts[self.part]
+        first = next(sentence_spans(text), (0, 0))
+        self.reading_position = (self.section, start + first[0], start + first[1])
+        if self.audio_jobs is None:
+            self._start_audio_worker()
+        self.waiting_for = (self.section, self.parts[self.part][0])
+        self._set_state("loading")
+        self.status.set(f"Preparing audio · Section {self.section + 1} · Part {self.part + 1}/{len(self.parts)}")
+        self._queue_upcoming_audio()
+        self._play_ready_audio()
+
+    def _start_audio_worker(self):
         self.generation += 1
         token = self.generation
         self.cancelled = threading.Event()
         cancelled = self.cancelled
-        _, text = self.parts[self.part]
-        voice, rate = self.voice.get().strip(), int(self.rate.get())
-        self._set_state("loading")
-        self.status.set(f"Preparing audio · Section {self.section + 1} · Part {self.part + 1}/{len(self.parts)}")
+        self.audio_jobs = jobs = queue.Queue()
+        voice, rate = self.voice.get().strip(), round(self.rate.get())
 
-        # Workers never touch Tk or audio devices. Tokens reject obsolete results
-        # after Stop, a chapter change, or opening a different book.
+        # One worker synthesizes in reading order. A session token rejects late
+        # results after Stop or a jump, including failures from prefetched chunks.
         def worker():
-            try:
-                result = asyncio.run(generate_audio(text, voice, rate, cancelled))
-                if result is not None and not cancelled.is_set():
-                    self.results.put((token, result, None))
-            except Exception:
-                if not cancelled.is_set():
-                    self.results.put((token, None, "Audio or sentence timestamps could not be loaded. Please check your internet connection and voice selection, then try again."))
+            while not cancelled.is_set():
+                job = jobs.get()
+                if job is None or cancelled.is_set():
+                    return
+                key, text = job
+                try:
+                    result = asyncio.run(generate_audio(text, voice, rate, cancelled))
+                    if result is not None and not cancelled.is_set():
+                        self.results.put((token, key, result, None))
+                except Exception:
+                    if not cancelled.is_set():
+                        self.results.put((token, key, None, "Audio or sentence timestamps could not be loaded. Please check your internet connection and voice selection, then try again."))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _upcoming_parts(self):
+        for start, text in self.parts[self.part:]:
+            yield (self.section, start), text
+        for section in range(self.section + 1, len(self.chapters)):
+            for start, text in text_parts(self.chapters[section][1]):
+                yield (section, start), text
+
+    def _queue_upcoming_audio(self):
+        upcoming = list(islice(self._upcoming_parts(), 3))
+        wanted = {key for key, _ in upcoming}
+        self.audio_requested.intersection_update(wanted)
+        self.audio_cache = {key: result for key, result in self.audio_cache.items() if key in wanted}
+        for key, text in upcoming:
+            if key not in self.audio_requested:
+                self.audio_requested.add(key)
+                self.audio_jobs.put((key, text))
+
+    def _play_ready_audio(self):
+        if self.state != "loading" or self.waiting_for not in self.audio_cache:
+            return
+        result, error = self.audio_cache.pop(self.waiting_for)
+        self.waiting_for = None
+        if error:
+            raise RuntimeError(error)
+        audio, cues = result
+        self._release_audio()
+        self.cues = cues
+        self.audio_temp = tempfile.TemporaryDirectory(prefix="yapbook-audio-")
+        path = Path(self.audio_temp.name) / "speech.mp3"
+        path.write_bytes(audio)
+        self.player.play(path, volume=round(self.volume.get()) * 10)
+        self._set_state("playing")
+        self._playing_status()
+
+    def _cancel_pending_audio(self):
+        self.generation += 1
+        self.cancelled.set()
+        if self.audio_jobs is not None:
+            self.audio_jobs.put(None)
+        self.audio_jobs = None
+        self.waiting_for = None
+        self.audio_cache.clear()
+        self.audio_requested.clear()
 
     def _playing_status(self):
         self.status.set(f"Reading · Section {self.section + 1}/{len(self.chapters)} · Part {self.part + 1}/{len(self.parts)}")
@@ -433,20 +523,13 @@ class ReadingWindow:
                     self.status.set("Could not load the voice list. Please check your internet connection.")
             while True:
                 try:
-                    token, result, error = self.results.get_nowait()
+                    token, key, result, error = self.results.get_nowait()
                 except queue.Empty:
                     break
-                if token != self.generation:
+                if token != self.generation or key not in self.audio_requested:
                     continue
-                if error:
-                    raise RuntimeError(error)
-                audio, self.cues = result
-                self.audio_temp = tempfile.TemporaryDirectory(prefix="epub-follow-audio-")
-                path = Path(self.audio_temp.name) / "speech.mp3"
-                path.write_bytes(audio)
-                self.player.play(path, volume=round(self.volume.get()) * 10)
-                self._set_state("playing")
-                self._playing_status()
+                self.audio_cache[key] = (result, error)
+            self._play_ready_audio()
             if self.state == "playing":
                 cue = cue_at(self.cues, self.player.position_ms())
                 base = self.parts[self.part][0]
@@ -457,6 +540,7 @@ class ReadingWindow:
                     self.part += 1
                     if self.part == len(self.parts):
                         if not self._advance_section():
+                            self._cancel_pending_audio()
                             self.part = 0
                             self._set_state("idle")
                             self.status.set("Finished reading the book.")
@@ -470,6 +554,8 @@ class ReadingWindow:
             self.timer = self.root.after(50, self._poll)
 
     def _highlight(self, span):
+        if span is not None:
+            self.reading_position = (self.section, *span)
         if span == self.highlighted:
             return
         self.highlighted = span
@@ -482,9 +568,33 @@ class ReadingWindow:
             self.audio_temp = None
         self.cues = []
 
+    def _save_position(self):
+        if self.book_id is None or self.reading_position is None:
+            return
+        # Read the audio clock once more before closing, even between UI ticks
+        # or between sentences when the yellow highlight is temporarily hidden.
+        if self.state in ("playing", "paused") and self.cues:
+            try:
+                position_ms = self.player.position_ms()
+                cue = next((cue for cue in reversed(self.cues) if cue.start_ms <= position_ms), None)
+                if cue is not None:
+                    base = self.parts[self.part][0]
+                    self.reading_position = (self.section, base + cue.start_char, base + cue.end_char)
+            except Exception:
+                pass
+        if self.reading_position == self.saved_position:
+            return
+        try:
+            self.position_store.save(self.book_id, self.reading_position, self.chapters)
+            self.saved_position = self.reading_position
+        except OSError:
+            if not self.position_warning_shown:
+                self.position_warning_shown = True
+                messagebox.showwarning("YapBook · Reading position", "Could not save the reading position on this computer.", parent=self.root)
+
     def stop(self):
-        self.generation += 1
-        self.cancelled.set()
+        self._save_position()
+        self._cancel_pending_audio()
         self._release_audio()
         self._highlight(None)
         self.part = 0
@@ -505,7 +615,7 @@ class ReadingWindow:
         self.root.destroy()
 
 
-def run_follow(path=None, voice="en-US-AriaNeural", rate=0, chapter=1):
+def run_follow(path=None, voice="en-US-AriaNeural", rate=0, chapter=None):
     root = tk.Tk()
     window = ReadingWindow(root, voice, rate)
     if path is not None:

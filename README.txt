@@ -31,10 +31,10 @@ the speech service's sentence timestamps and
 the audio player's actual position. "Pause" and "Resume" pause/resume
 both audio and highlighting. "Auto-scroll while reading" controls auto-scrolling;
 "Text size: Smaller / Larger" changes the font size. Choose another section using
-the "Section" dropdown. "Speed (%)" is relative to normal speed: 0 is normal,
+the "Section" dropdown. The compact "Speed" slider is relative to normal speed: 0 is normal,
 negative values are slower and positive values are faster.
 "Stop" resets playback to the beginning of the selected section.
-"Volume" adjusts YapBook's playback from 0% (muted) to 100%. It works while
+The compact "Volume" slider beside "Speed" adjusts playback from 0% (muted) to 100%. It works while
 playing or paused and stays at the chosen level when the next audio part or
 section starts. It does not change the Windows system volume. The setting lasts
 until you close YapBook; a new session starts at 100%.
@@ -42,6 +42,14 @@ Space pauses/resumes when the reading text has keyboard focus.
 The book continues into subsequent sections automatically. Voice and speed
 can be changed while stopped. The EXE includes the HTML renderer. When using
 the Python version, install the updated requirements.txt first.
+
+The graphical reader saves each EPUB's last read sentence on pause, stop,
+close, or switching books. Reopening the EPUB restores that sentence and its
+highlight; select "Start reading" to continue. Playback does not start by itself.
+Stopping before closing preserves the last read sentence. An explicit --chapter
+overrides the saved position. Moving or renaming the same EPUB keeps its position.
+Positions are stored in %LOCALAPPDATA%\YapBook\positions, separately from the EXE,
+as book/text hashes and offsets. They contain no book text.
 
 Disable "Auto-scroll while reading" to scroll freely while playback continues.
 Clicking a sentence in any displayed section switches playback to that section.
@@ -67,11 +75,14 @@ REBUILD THE EXE (optional)
 The build script installs PyInstaller into this folder's .venv and writes
 dist\YapBook.exe. Test the source with:
 
-    .\.venv\Scripts\python.exe -m unittest test_follow_reader test_html_reader -v
+    .\.venv\Scripts\python.exe -m unittest test_follow_reader test_html_reader test_reading_positions -v
 
-Press Ctrl+C to stop. Use --chapter to restart a section later. It does not
-save an automatic bookmark. Audio is generated in short sections before
-playback, so brief pauses between sections are normal. Temporary audio is
+In the plain CLI, press Ctrl+C to stop and use --chapter to restart a section
+later; automatic reading positions apply to the graphical reader. During GUI playback, the next two audio chunks are
+prepared in the background, including across section boundaries. This reduces
+loading pauses; slow service responses and player transitions can still cause
+brief gaps. Current and upcoming text is sent to Microsoft for speech generation.
+Stopping or jumping outside the current audio clears the old preparation. Temporary audio is
 removed on normal exit or Ctrl+C. Playback uses your default Windows output.
 
 OPTIONS
