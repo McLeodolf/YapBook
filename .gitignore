@@ -1,0 +1,21 @@
+# Python environments and generated files
+.venv/
+.build-venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+build/
+dist/
+*.spec
+*.exe
+
+# Local backups, tools, and credentials
+backup-*/
+.serena/
+.env
+.env.*
+
+# Books and generated audio are not part of the source repository
+*.epub
+*.mp3
+*.wav

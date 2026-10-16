@@ -1,0 +1,110 @@
+import io
+import tkinter as tk
+import unittest
+from types import SimpleNamespace
+
+from PIL import Image
+from bs4 import BeautifulSoup
+
+from epub_document import BookSection, EpubDocument, fragment_id
+from html_reader import HtmlBookView
+
+
+def sample_book():
+    buffer = io.BytesIO()
+    Image.new('RGB', (30, 20), '#4477aa').save(buffer, format='PNG')
+    sections = [
+        BookSection('Eins', 'Text/one.xhtml', '''<html><head><link rel="stylesheet" href="../Styles/main.css"/></head>
+          <body class="book"><h1>Erster Abschnitt</h1><p id="same" class="lead">Ein <em>kursiver</em> Satz. Noch ein Satz.</p>
+          <p>Zweiter Absatz mit <strong>fettem Text</strong>.</p><ul><li>Listenpunkt</li></ul>
+          <img src="../Images/picture.png"/><p style="display:none">VERSTECKT</p></body></html>'''),
+        BookSection('Zwei', 'Text/two.xhtml', '''<html><head><style>body {color: blue} .lead {text-align:right}</style></head>
+          <body><h2>Zweiter Abschnitt</h2><p id="same" class="lead">Hallo Grüße 👋. Ein weiterer Satz.</p>
+          <a href="one.xhtml#same">Zurück</a></body></html>'''),
+        BookSection('Drei', 'Text/three.xhtml', '<html><body><h2>Dritter Abschnitt</h2><p>Der nächste Text.</p></body></html>')]
+    assets = {'Styles/main.css': (b'@import "extra.css"; body {color: #202020} .lead {text-align:center} em {font-style:italic}', 'text/css'),
+              'Styles/extra.css': (b'strong {font-weight:bold}', 'text/css'),
+              'Images/picture.png': (buffer.getvalue(), 'image/png')}
+    document = EpubDocument(sections, assets)
+    document.build_page()
+    return document
+
+
+class HtmlReaderTests(unittest.TestCase):
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.view = HtmlBookView(self.root)
+        self.view.pack()
+        self.book = sample_book()
+        self.chapters = self.view.set_document(self.book)
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def test_all_sections_and_original_structure_are_present(self):
+        page = self.view.get_page_text()
+        self.assertIn('Erster Abschnitt', page)
+        self.assertIn('Zweiter Abschnitt', page)
+        self.assertIn('Dritter Abschnitt', page)
+        self.assertNotIn('VERSTECKT', page)
+        self.assertIn('Grüße 👋.', page)
+        dom = BeautifulSoup(self.book.markup, 'html.parser')
+        self.assertEqual(len(dom.select('.reader-body')), 3)
+        for tag in ('h1', 'h2', 'em', 'strong', 'ul', 'li', 'img'):
+            self.assertIsNotNone(dom.find(tag))
+
+    def test_css_is_applied_without_leaking_between_sections(self):
+        first = self.view.document.getElementById(fragment_id(0, 'same')).node
+        second = self.view.document.getElementById(fragment_id(1, 'same')).node
+        self.assertEqual(self.view.html.get_node_property(first, 'text-align'), 'center')
+        self.assertEqual(self.view.html.get_node_property(second, 'text-align'), 'right')
+        emph = self.view.html.search('#reader-chapter-0 em')[0]
+        self.assertEqual(self.view.html.get_node_property(emph, 'font-style'), 'italic')
+        strong = self.view.html.search('#reader-chapter-0 strong')[0]
+        self.assertIn(self.view.html.get_node_property(strong, 'font-weight'), ('bold', '700'))
+
+    def test_local_images_and_internal_links_are_rebased(self):
+        dom = BeautifulSoup(self.book.markup, 'html.parser')
+        url = dom.img['src']
+        result = self.book.request_resource(url)
+        self.assertEqual(result[2], 'image/png')
+        self.assertTrue(result[1].startswith(b'\x89PNG'))
+        self.assertEqual(dom.a['href'], '#' + fragment_id(0, 'same'))
+        with self.assertRaises(OSError):
+            self.book.request_resource('https://example.org/picture.png')
+
+    def test_sentence_highlight_crosses_inline_formatting_and_survives_zoom(self):
+        text = self.chapters[0][1]
+        start = text.index('Ein kursiver Satz.')
+        end = start + len('Ein kursiver Satz.')
+        self.view.highlight(0, (start, end), scroll=True)
+        self.assertEqual(self.view.highlighted_text, 'Ein kursiver Satz.')
+        offsets = self.view.offsets[0]
+        raw = self.view.get_page_text()[offsets[start]:offsets[end - 1] + 1]
+        self.assertEqual(' '.join(raw.split()), 'Ein kursiver Satz.')
+        self.view.set_font_scale(1.4)
+        self.assertEqual(self.view.chapters, self.chapters)
+        self.view.highlight(0, (start, end), scroll=True)
+        self.assertEqual(self.view.highlighted_text, 'Ein kursiver Satz.')
+
+    def test_actual_click_coordinates_resolve_to_the_next_section(self):
+        self.root.geometry('900x600+10000+10000')
+        self.root.deiconify()
+        self.view.pack(fill='both', expand=True)
+        self.root.update()
+        char = self.chapters[1][1].index('Hallo') + 2
+        self.view.scroll_to(1, char)
+        self.root.update()
+        offset = self.view.offsets[1][char]
+        bounds = self.view.html.text('bbox', *self.view.html.text('index', offset, offset + 1))
+        page = self.view.html.bbox()
+        top = self.view.html.yview()[0] * page[3]
+        event = SimpleNamespace(x=int((bounds[0] + bounds[2]) / 2), y=int((bounds[1] + bounds[3]) / 2 - top))
+        section, selected = self.view.clicked_position(event)
+        self.assertEqual(section, 1)
+        self.assertLessEqual(abs(selected - char), 1)
+
+
+if __name__ == '__main__':
+    unittest.main()
