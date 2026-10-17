@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+frontend/node_modules/
+frontend/test-results/
+frontend/tests/*.png
+frontend/tests/*.epub
+!frontend/dist/
+!frontend/dist/**
+*.log

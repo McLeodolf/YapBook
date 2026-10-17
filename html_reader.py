@@ -13,6 +13,7 @@ class HtmlBookView(HtmlFrame):
         self.offsets = []
         self.chapters = []
         self.highlighted_text = ""
+        self.dark = False
         super().__init__(master, messages_enabled=False, threading_enabled=False,
                          javascript_enabled=False, forms_enabled=False, objects_enabled=False,
                          # The legacy compatibility filter strips emoji even on Tk 9.
@@ -20,6 +21,24 @@ class HtmlBookView(HtmlFrame):
                          request_func=self._resource, on_link_click=self._link)
         self.load_html('<html><body style="background:#fffdf8;color:#667085;font:20px Georgia;padding:36px">'
                        'Open an EPUB to read along with its original formatting.</body></html>')
+        self._theme_styles()
+
+    def _theme_styles(self):
+        self.add_css('''html.reader-dark, html.reader-dark body {
+            background: #161e24 !important; color: #d5ded9 !important;
+        }
+        html.reader-dark body * {
+            color: #d5ded9 !important; background-color: transparent !important;
+            border-color: #36463e !important;
+        }
+        html.reader-dark a { color: #9fc9b1 !important; }
+        ''', priority="user")
+        self.set_theme(self.dark)
+
+    def set_theme(self, dark):
+        self.dark = bool(dark)
+        self.document.documentElement.setAttribute("class", "reader-dark" if self.dark else "")
+        self.update_idletasks()
 
     def _resource(self, url, *args):
         if self.model is None:
@@ -37,6 +56,7 @@ class HtmlBookView(HtmlFrame):
     def set_document(self, model):
         self.model = model
         self.load_html(model.markup, base_url="https://epub.local/")
+        self._theme_styles()
         self.update_idletasks()
         self._map_text()
         self.clear_highlight()
@@ -53,15 +73,19 @@ class HtmlBookView(HtmlFrame):
         self.offsets, self.chapter_ranges, self.chapters = [], [], []
         for index, (_, start) in enumerate(markers):
             end = markers[index + 1][0] if index + 1 < len(markers) else len(page)
-            words, offsets = [], []
+            pieces, offsets = [], []
+            previous_end = 0
             for match in re.finditer(r"\S+", page[start:end]):
-                if words:
+                if pieces:
+                    gap = page[start + previous_end:start + match.start()]
+                    pieces.append("\n" if "\n" in gap else " ")
                     offsets.append(start + match.start() - 1)
-                words.append(match.group())
+                pieces.append(match.group())
                 offsets.extend(range(start + match.start(), start + match.end()))
+                previous_end = match.end()
             self.chapter_ranges.append((start, end))
             self.offsets.append(offsets)
-            self.chapters.append((self.model.sections[index].title, " ".join(words)))
+            self.chapters.append((self.model.sections[index].title, "".join(pieces)))
 
     def clear_highlight(self):
         self.html.tag("delete", "reader-spoken")

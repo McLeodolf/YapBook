@@ -6,12 +6,12 @@ from pathlib import Path
 import re
 import sys
 import tempfile
-import textwrap
 import time
 
 import edge_tts
 from bs4 import BeautifulSoup
 from ebooklib import ITEM_DOCUMENT, epub
+from app_state import DEFAULT_VOICE, service_rate
 
 
 def read_chapters(path):
@@ -29,7 +29,13 @@ def read_chapters(path):
             tag.decompose()
         heading = soup.find(["h1", "h2", "h3"])
         title = heading.get_text(" ", strip=True) if heading else item.get_name()
-        text = " ".join(soup.get_text(" ", strip=True).split())
+        # HTML source line wrapping is whitespace; block elements and br are pauses.
+        for block in soup.find_all(["p", "div", "h1", "h2", "h3", "h4", "h5", "h6",
+                                    "li", "blockquote", "dt", "dd", "tr", "td", "th", "br"]):
+            block.insert_before("\u2029")
+            block.insert_after("\u2029")
+        lines = [" ".join(line.split()) for line in soup.get_text().split("\u2029")]
+        text = "\n".join(line for line in lines if line)
         if text:
             chapters.append((title, text))
     if not chapters:
@@ -38,17 +44,47 @@ def read_chapters(path):
 
 
 def speech_chunks(text, limit=3500):
-    """Bound startup time, keeping sentence boundaries where possible."""
-    chunk = ""
-    for sentence in re.split(r"(?<=[.!?])\s+", text):
-        for piece in textwrap.wrap(sentence, width=limit, break_long_words=False,
-                                   break_on_hyphens=False):
-            if chunk and len(chunk) + len(piece) + 1 > limit:
-                yield chunk
-                chunk = ""
-            chunk = f"{chunk} {piece}".strip()
-    if chunk:
-        yield chunk
+    """Bound startup time without losing paragraph breaks or source offsets."""
+    if limit < 1:
+        raise ValueError("Chunk size must be positive.")
+    start = 0
+    while start < len(text):
+        if text[start].isspace():
+            start += 1
+            continue
+        end = len(text)
+        if end - start > limit:
+            window = text[start:start + limit + 1]
+            boundaries = list(re.finditer(r"(?<=[.!?])\s+|\n+", window))
+            if not boundaries:
+                boundaries = list(re.finditer(r"\s+", window))
+            if boundaries:
+                end = start + boundaries[-1].start()
+            else:
+                boundary = re.search(r"\s+", text[start + limit:])
+                if boundary:
+                    end = start + limit + boundary.start()
+        yield text[start:end].rstrip()
+        start = end
+
+
+def prepare_speech(text):
+    """Give unpunctuated headings sentence prosody, retaining source offsets."""
+    spoken, offsets = [], []
+    for match in re.finditer(r"[^\n]+|\n", text):
+        part = match.group()
+        if part != "\n":
+            spoken.append(part)
+            offsets.extend(range(match.start(), match.end()))
+            line = part.rstrip()
+            if line and match.end() < len(text) and not re.search(r'''[.!?…:;,]["'”’»)}\]]*$''', line):
+                # Only the speech request receives punctuation; the book stays intact.
+                spoken.append(".")
+                offsets.append(match.start() + len(line) - 1)
+        else:
+            spoken.append(part)
+            offsets.append(match.start())
+    return "".join(spoken), offsets
 
 
 def play_mp3(path, volume=1000):
@@ -73,8 +109,8 @@ async def list_voices(language):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("epub", nargs="?", type=Path, help="path to your EPUB")
-    parser.add_argument("--voice", default="en-US-AriaNeural", help="online voice name")
-    parser.add_argument("--rate", type=int, default=0, help="speed change in percent, e.g. 15 or -10")
+    parser.add_argument("--voice", help=f"online voice name (default: {DEFAULT_VOICE}; saved voice with --follow)")
+    parser.add_argument("--rate", type=int, help="speed adjustment from the comfortable baseline; 0 means service rate -15%%")
     parser.add_argument("--chapter", type=int, help="start at this section (1-based); overrides saved position with --follow")
     parser.add_argument("--list-chapters", action="store_true", help="show section numbers and exit")
     parser.add_argument("--list-voices", nargs="?", const="", metavar="LANGUAGE",
@@ -89,7 +125,7 @@ def main():
         except Exception as exc:
             raise RuntimeError("Could not fetch voices. Check your internet connection.") from exc
         return
-    if not -50 <= args.rate <= 100:
+    if args.rate is not None and not -50 <= args.rate <= 100:
         parser.error("--rate must be between -50 and 100")
     if args.follow:
         if sys.platform != "win32":
@@ -97,6 +133,8 @@ def main():
         from follow_reader import run_follow
         run_follow(args.epub, args.voice, args.rate, args.chapter)
         return 0
+    args.voice = args.voice or DEFAULT_VOICE
+    args.rate = args.rate if args.rate is not None else 0
     if args.chapter is None:
         args.chapter = 1
     if args.epub is None:
@@ -133,8 +171,11 @@ def main():
                 for part, chunk in enumerate(chunks, 1):
                     print(f"  Preparing audio {part}/{len(chunks)}...", flush=True)
                     try:
-                        speech = edge_tts.Communicate(chunk, args.voice, rate=f"{args.rate:+d}%")
-                        asyncio.run(speech.save(str(audio)))
+                        spoken, _ = prepare_speech(chunk)
+                        speech = edge_tts.Communicate(spoken, args.voice, rate=f"{service_rate(args.rate):+d}%")
+                        async def save_audio():
+                            await asyncio.wait_for(speech.save(str(audio)), timeout=90)
+                        asyncio.run(save_audio())
                     except Exception as exc:
                         raise RuntimeError(
                             "Speech generation failed. Check your connection and voice name; "

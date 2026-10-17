@@ -13,6 +13,7 @@ from ebooklib import epub
 
 from follow_reader import ReadingWindow, SentenceCue
 from reading_positions import PositionStore, book_fingerprint
+from app_state import AppState
 from test_follow_reader import FakeAudio
 
 
@@ -64,6 +65,16 @@ class PositionStoreTests(unittest.TestCase):
         self.assertEqual(self.store.get(self.book_id, self.chapters), (0, 0, 6))
         self.assertFalse(list(self.store.directory.glob("*.tmp")))
 
+    def test_positions_from_before_paragraph_pauses_remain_valid(self):
+        old_text = 'Chapter 2 Exploring the Quiet Garden A small bird landed.'
+        new_text = 'Chapter 2\nExploring the Quiet Garden\nA small bird landed.'
+        start = old_text.index('A small')
+        position = (0, start, len(old_text))
+        self.store.save(self.book_id, position, [('One', old_text)])
+        self.assertEqual(self.store.get(self.book_id, [('One', new_text)]), position)
+        self.store.save(self.book_id, position, [('One', new_text)])
+        self.assertEqual(self.store.get(self.book_id, [('One', old_text)]), position)
+
     def test_position_does_not_store_book_text_or_path(self):
         self.store.save(self.book_id, (0, 7, 14), self.chapters)
         content = (self.store.directory / f"{self.book_id}.json").read_text(encoding="utf-8")
@@ -92,7 +103,7 @@ class ResumeTests(unittest.TestCase):
         root = tk.Tk()
         root.withdraw()
         with patch("follow_reader.WindowsAudio", FakeAudio):
-            window = ReadingWindow(root, position_store=self.store)
+            window = ReadingWindow(root, position_store=self.store, app_state=AppState(self.directory / 'library.json'))
         self.windows.append(window)
         window.load_book(path or self.book, chapter)
         self.assertEqual(len(window.chapters), 2)

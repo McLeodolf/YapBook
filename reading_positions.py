@@ -32,7 +32,8 @@ class PositionStore:
             text = chapters[section][1]
             if not (0 <= start < end <= len(text) or start == end == len(text) == 0):
                 return None
-            if record.get("text_hash") != hashlib.sha256(text.encode("utf-8")).hexdigest():
+            # Structural breaks replace one space, preserving offsets and old bookmarks.
+            if record.get("text_hash") != hashlib.sha256(text.replace("\n", " ").encode("utf-8")).hexdigest():
                 return None
             return section, start, end
         except (OSError, ValueError, KeyError, TypeError):
@@ -41,7 +42,7 @@ class PositionStore:
     def save(self, book_id, position, chapters):
         section, start, end = position
         record = {"version": 1, "section": section, "start": start, "end": end,
-                  "text_hash": hashlib.sha256(chapters[section][1].encode("utf-8")).hexdigest()}
+                  "text_hash": hashlib.sha256(chapters[section][1].replace("\n", " ").encode("utf-8")).hexdigest()}
         self.directory.mkdir(parents=True, exist_ok=True)
         temporary = None
         try:

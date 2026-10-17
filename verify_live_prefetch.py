@@ -1,11 +1,14 @@
 """Optional online prefetch check with invented text and muted Windows playback."""
 
 import time
+from pathlib import Path
+import tempfile
 import tkinter as tk
 from unittest.mock import patch
 
 from epub_document import EpubDocument
 from follow_reader import ReadingWindow, generate_audio
+from app_state import AppState
 
 
 def wait_until(root, condition, timeout=45):
@@ -19,19 +22,20 @@ def wait_until(root, condition, timeout=45):
 
 
 def main():
+    preferences = tempfile.TemporaryDirectory(prefix="yapbook-prefetch-check-")
     root = tk.Tk()
     root.withdraw()
-    window = ReadingWindow(root)
+    window = ReadingWindow(root, app_state=AppState(Path(preferences.name) / "library.json"))
     chapters = [
-        ("One", "This is a YapBook test with invented text. The next two parts are prepared while this part plays. We can pause and resume without losing the prepared audio. No text from a real book is used in this check."),
-        ("Two", "The second section has already been prepared. Its sentence highlight should follow the audio."),
-        ("Three", "The third section is ready as well. This is the final sentence of the test."),
+        ("One", "This invented sentence tests whether YapBook prepares the next two sentences while playback is paused."),
+        ("Two", "The second sentence has already been prepared across a section boundary."),
+        ("Three", "The third sentence is ready as well and finishes this test."),
     ]
     requests = []
 
-    async def counted_audio(text, voice, rate, cancelled):
+    async def counted_audio(text, voice, rate, cancelled, progress=None):
         requests.append(text)
-        return await generate_audio(text, voice, rate, cancelled)
+        return await generate_audio(text, voice, rate, cancelled, progress)
 
     try:
         window.chapters = chapters
@@ -46,7 +50,7 @@ def main():
             wait_until(root, lambda: len(window.audio_cache) == 2)
             assert window.state == "paused"
             assert requests == [text for _, text in chapters]
-            print("PASS: two upcoming sections prepared during paused playback", flush=True)
+            print("PASS: exactly two upcoming sentences prepared during paused playback", flush=True)
             window.toggle_play()
 
             for section in (1, 2):
@@ -66,6 +70,7 @@ def main():
             print("PASS: end of book releases playback and prefetch state", flush=True)
     finally:
         window.close()
+        preferences.cleanup()
 
 
 if __name__ == "__main__":

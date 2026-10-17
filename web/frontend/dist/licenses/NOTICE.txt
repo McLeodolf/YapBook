@@ -1,0 +1,10 @@
+YapBook browser component: third-party notices
+
+streamlit-component-lib
+Copyright (c) Streamlit Inc. (2018-2022), Snowflake Inc. (2022).
+Licensed under Apache License 2.0. The full license is included in
+apache-arrow-LICENSE.txt.txt. Source: https://github.com/streamlit/streamlit
+
+The other named files in this directory contain the original license text
+for React, React DOM, Lucide, fflate, DOMPurify, and Apache Arrow.
+Dependencies are pinned by the committed package-lock.json.

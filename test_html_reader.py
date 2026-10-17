@@ -54,6 +54,23 @@ class HtmlReaderTests(unittest.TestCase):
         for tag in ('h1', 'h2', 'em', 'strong', 'ul', 'li', 'img'):
             self.assertIsNotNone(dom.find(tag))
 
+    def test_speech_preserves_structural_breaks_but_not_source_or_visual_wrapping(self):
+        document = EpubDocument([BookSection('One', 'one.xhtml',
+            '<h1>Chapter 2</h1><h2>Exploring the Quiet Garden</h2>'
+            '<p>A small\n bird <em>landed</em> on the wall.</p>'
+            '<p>Next paragraph.<br>Another line.</p>')], {})
+        document.build_page()
+        chapters = self.view.set_document(document)
+        expected = 'Chapter 2\nExploring the Quiet Garden\nA small bird landed on the wall.\nNext paragraph.\nAnother line.'
+        self.assertEqual(chapters[0][1], expected)
+        start = expected.index('A small')
+        end = expected.index('\nNext')
+        self.view.highlight(0, (start, end))
+        self.assertEqual(self.view.highlighted_text, 'A small bird landed on the wall.')
+        self.root.geometry('320x300')
+        self.view.set_font_scale(1.8)
+        self.assertEqual(self.view.chapters, chapters)
+
     def test_css_is_applied_without_leaking_between_sections(self):
         first = self.view.document.getElementById(fragment_id(0, 'same')).node
         second = self.view.document.getElementById(fragment_id(1, 'same')).node
@@ -87,6 +104,24 @@ class HtmlReaderTests(unittest.TestCase):
         self.assertEqual(self.view.chapters, self.chapters)
         self.view.highlight(0, (start, end), scroll=True)
         self.assertEqual(self.view.highlighted_text, 'Ein kursiver Satz.')
+
+    def test_theme_changes_colors_without_changing_offsets_or_highlight(self):
+        text = self.chapters[0][1]
+        start = text.index('Ein kursiver Satz.')
+        self.view.highlight(0, (start, start + len('Ein kursiver Satz.')))
+        offsets = [list(values) for values in self.view.offsets]
+        node = self.view.document.getElementById(fragment_id(0, 'same')).node
+        original = self.view.html.get_node_property(node, 'color')
+        for _ in range(2):
+            self.view.set_theme(True)
+            self.assertEqual(self.view.html.get_node_property(node, 'color'), '#d5ded9')
+            self.assertEqual(self.view.highlighted_text, 'Ein kursiver Satz.')
+            self.assertEqual(self.view.offsets, offsets)
+            self.view.set_theme(False)
+            self.assertEqual(self.view.html.get_node_property(node, 'color'), original)
+        self.view.set_theme(True)
+        self.view.set_document(self.book)
+        self.assertEqual(self.view.html.get_node_property(self.view.document.getElementById(fragment_id(0, 'same')).node, 'color'), '#d5ded9')
 
     def test_actual_click_coordinates_resolve_to_the_next_section(self):
         self.root.geometry('900x600+10000+10000')

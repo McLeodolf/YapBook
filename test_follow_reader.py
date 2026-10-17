@@ -1,16 +1,57 @@
 """Offline tests: python -m unittest test_follow_reader -v."""
 
+import gc
+from pathlib import Path
+import tempfile
 import tkinter as tk
 import threading
 import time
 import unittest
 from unittest.mock import patch
 
-from follow_reader import ReadingWindow, SentenceCue, align_sentences, cue_at, sentence_spans
+from ebooklib import epub
+
+from follow_reader import ReadingWindow, SentenceCue, align_sentences, cue_at, generate_audio, sentence_spans, text_parts
 from epub_document import EpubDocument
+from app_state import AppState
+from read_epub import prepare_speech, read_chapters, speech_chunks
 
 
 class SentenceTests(unittest.TestCase):
+    def test_cli_keeps_block_breaks_and_inline_words(self):
+        chapter = epub.EpubHtml(title='One', file_name='one.xhtml')
+        chapter.content = ('<h1>Chapter 2</h1><p>A small\n bird <em>landed</em>.</p>'
+                           '<table><tr><td>Left</td><td>Right</td></tr></table>')
+        book = epub.EpubBook()
+        book.add_item(chapter)
+        book.spine = [(chapter.id, 'yes')]
+        with patch('read_epub.epub.read_epub', return_value=book):
+            chapters = read_chapters('generated-test.epub')
+        self.assertEqual(chapters[0][1], 'Chapter 2\nA small bird landed.\nLeft\nRight')
+
+    def test_headings_and_explicit_breaks_are_separate_click_targets(self):
+        text = 'Chapter 2\nExploring the Quiet Garden\nA small bird landed. Another sentence.'
+        self.assertEqual([text[a:b] for a, b in sentence_spans(text)],
+                         ['Chapter 2', 'Exploring the Quiet Garden', 'A small bird landed.', 'Another sentence.'])
+
+    def test_speech_punctuation_does_not_duplicate_existing_endings(self):
+        text = 'A heading\nA question?\n“Quoted sentence.”\nLast paragraph.'
+        spoken, offsets = prepare_speech(text)
+        self.assertEqual(spoken, 'A heading.\nA question?\n“Quoted sentence.”\nLast paragraph.')
+        self.assertEqual(len(spoken), len(offsets))
+        self.assertEqual(text[offsets[spoken.index('Last')]:], 'Last paragraph.')
+
+    def test_chunking_preserves_paragraphs_and_source_offsets(self):
+        text = 'Chapter 2\nA short title\n' + 'One sentence. Another sentence. ' * 25
+        chunks = list(speech_chunks(text, limit=90))
+        self.assertTrue(chunks[0].startswith('Chapter 2\nA short title\n'))
+        self.assertTrue(all(len(chunk) <= 90 for chunk in chunks))
+        self.assertEqual(' '.join(' '.join(chunks).split()), ' '.join(text.split()))
+        for start, chunk in text_parts(text):
+            self.assertEqual(text[start:start + len(chunk)], chunk)
+        long_word = 'x' * 100
+        self.assertEqual(list(speech_chunks(long_word + ' end', limit=20)), [long_word, 'end'])
+
     def test_repeated_sentences_and_unicode_preserve_source_offsets(self):
         text = '„Grüße 👋!“ Grüße 👋! Noch ein Satz.'
         events = [dict(text='"Grüße 👋!"', offset=1000000, duration=10000000),
@@ -23,6 +64,16 @@ class SentenceTests(unittest.TestCase):
         self.assertIsNone(cue_at(cues, 50))
         self.assertIsNone(cue_at(cues, 4000))
 
+    def test_audio_parts_are_individual_sentences_with_source_offsets(self):
+        text = 'A sentence in a long chapter. ' * 250
+        parts = list(text_parts(text, 29))
+        self.assertLessEqual(len(parts[0][1]), 350)
+        self.assertEqual(parts[0][1], 'A sentence in a long chapter.')
+        self.assertTrue(all(len(chunk) <= 700 for _, chunk in parts))
+        self.assertEqual(' '.join(chunk for _, chunk in parts), text[29:].strip())
+        for start, chunk in parts:
+            self.assertEqual(text[start:start + len(chunk)], chunk)
+
     def test_local_sentence_start_handles_abbreviations_and_decimals(self):
         text = 'Dr. Weber liest z. B. 3.14 Seiten. „Hallo!“ Danach geht es weiter.'
         self.assertEqual([text[a:b] for a, b in sentence_spans(text)],
@@ -33,6 +84,25 @@ class SentenceTests(unittest.TestCase):
             align_sentences('Hallo.', [])
         with self.assertRaises(ValueError):
             align_sentences('Hallo.', [dict(text='Andere Worte.', offset=0, duration=10)])
+
+
+class SpeechPreparationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_service_heading_cues_map_back_to_unmodified_book_text(self):
+        text = 'Chapter 2\nExploring the Quiet Garden\nA small bird landed.'
+
+        class Speech:
+            async def stream(self):
+                yield dict(type='audio', data=b'fake mp3')
+                for index, sentence in enumerate(('Chapter 2.', 'Exploring the Quiet Garden.', 'A small bird landed.')):
+                    yield dict(type='SentenceBoundary', text=sentence, offset=index * 20_000_000, duration=15_000_000)
+
+        with patch('follow_reader.edge_tts.Communicate', return_value=Speech()) as communicate:
+            audio, cues = await generate_audio(text, 'en-US-AriaNeural', 0, threading.Event())
+        self.assertEqual(audio, b'fake mp3')
+        self.assertEqual(communicate.call_args.args[0], 'Chapter 2.\nExploring the Quiet Garden.\nA small bird landed.')
+        self.assertEqual([text[cue.start_char:cue.end_char] for cue in cues],
+                         ['Chapter 2', 'Exploring the Quiet Garden', 'A small bird landed.'])
+        self.assertEqual([cue.start_ms for cue in cues], [0, 2000, 4000])
 
 
 class FakeAudio:
@@ -76,10 +146,11 @@ class FakeAudio:
 
 class WindowTests(unittest.TestCase):
     def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
         self.root = tk.Tk()
         self.root.withdraw()
         with patch('follow_reader.WindowsAudio', FakeAudio):
-            self.app = ReadingWindow(self.root)
+            self.app = ReadingWindow(self.root, app_state=AppState(Path(self.folder.name) / 'library.json'))
         self.app.chapters = [('Kapitel 1', 'Erster Satz. Zweiter Satz. Dritter Satz.'),
                              ('Kapitel 2', 'Noch ein Kapitel.')]
         self.app.chapter_box.configure(values=['Kapitel 1', 'Kapitel 2'])
@@ -87,6 +158,10 @@ class WindowTests(unittest.TestCase):
 
     def tearDown(self):
         self.app.close()
+        self.app = self.root = None
+        # Tk objects must be collected here, not in a later audio worker thread.
+        gc.collect()
+        self.folder.cleanup()
 
     def poll_once(self):
         self.root.after_cancel(self.app.timer)
@@ -102,6 +177,10 @@ class WindowTests(unittest.TestCase):
         self.fail('Timed out waiting for the audio worker')
 
     def queue_audio(self, audio, cues):
+        # These fixtures supply an MP3 for a complete section; worker tests
+        # below exercise real per-sentence partitioning and prefetch separately.
+        self.app.parts = [(0, self.app.chapters[self.app.section][1])]
+        self.app.part = 0
         key = (self.app.section, self.app.parts[self.app.part][0])
         self.app.audio_requested.add(key)
         self.app.waiting_for = key
@@ -128,7 +207,7 @@ class WindowTests(unittest.TestCase):
         old_token = self.app.generation
         with patch.object(self.app, '_request_part') as request:
             self.app.seek_to_character(18)
-        self.assertEqual(self.app.parts[0], (13, 'Zweiter Satz. Dritter Satz.'))
+        self.assertEqual(self.app.parts[0], (13, 'Zweiter Satz.'))
         self.assertEqual(self.app.highlighted, (13, 26))
         self.assertGreater(self.app.generation, old_token)
         request.assert_called_once()
@@ -204,7 +283,7 @@ class WindowTests(unittest.TestCase):
         self.use_chapters(chapters)
         calls = []
 
-        async def speech(text, voice, rate, cancelled):
+        async def speech(text, voice, rate, cancelled, progress=None):
             calls.append((text, voice, rate))
             return text.encode(), [SentenceCue(0, 1000, 0, len(text))]
 
@@ -215,7 +294,7 @@ class WindowTests(unittest.TestCase):
                 self.app.toggle_play()
                 self.wait_until(lambda: len(self.app.audio_cache) == 2)
                 self.assertEqual([call[0] for call in calls], [text for _, text in chapters[:3]])
-                self.assertTrue(all(call[2] == 15 for call in calls))
+                self.assertTrue(all(call[2] == 0 for call in calls))
                 self.assertEqual(len(self.app.player.play_calls), 1)
                 self.assertTrue(self.app.speed_slider.instate(['disabled']))
 
@@ -236,7 +315,7 @@ class WindowTests(unittest.TestCase):
         self.assertGreaterEqual(len(self.app.parts), 4)
         calls = []
 
-        async def speech(text, voice, rate, cancelled):
+        async def speech(text, voice, rate, cancelled, progress=None):
             calls.append(text)
             return text.encode(), [SentenceCue(0, 1000, 0, len(text))]
 
@@ -261,7 +340,7 @@ class WindowTests(unittest.TestCase):
         release = threading.Event()
         calls = []
 
-        async def speech(text, voice, rate, cancelled):
+        async def speech(text, voice, rate, cancelled, progress=None):
             calls.append(text)
             if text == 'Second sentence.':
                 release.wait(3)
@@ -296,7 +375,7 @@ class WindowTests(unittest.TestCase):
         release, finished = threading.Event(), threading.Event()
         calls = []
 
-        async def speech(text, voice, rate, cancelled):
+        async def speech(text, voice, rate, cancelled, progress=None):
             calls.append(text)
             if text == 'Sentence 1.':
                 release.wait(3)
@@ -323,7 +402,8 @@ class WindowTests(unittest.TestCase):
                 self.app.stop()
 
     def test_prefetch_failure_does_not_interrupt_the_current_chunk(self):
-        async def speech(text, voice, rate, cancelled):
+        self.use_chapters([('One', 'First sentence.'), ('Two', 'Second sentence.')])
+        async def speech(text, voice, rate, cancelled, progress=None):
             if text == self.app.chapters[1][1]:
                 raise OSError('Simulated service failure')
             return text.encode(), [SentenceCue(0, 1000, 0, len(text))]
