@@ -19,7 +19,7 @@ const page=await browser.newPage({viewport:{width:1280,height:920}});
 const errors=[];page.on('pageerror',e=>errors.push(e.message));
 await page.addInitScript(()=>{window.__commands=[];window.addEventListener('message',event=>{if(event.data?.type==='streamlit:setComponentValue')window.__commands.push(event.data.value);});});
 try {
- await page.goto('http://127.0.0.1:8501/');
+ await page.goto(process.env.YAPBOOK_TEST_URL || 'http://127.0.0.1:8501/');
  const app=page.frameLocator('iframe[title="streamlit_app.yapbook_reader"]');
  await app.getByRole('heading',{name:'YapBook'}).waitFor({timeout:30000});
  await page.screenshot({path:'tests/web-desktop.png',fullPage:true});

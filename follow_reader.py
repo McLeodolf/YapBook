@@ -259,10 +259,12 @@ class ReadingWindow:
         tk.Label(header, image=self.app_logo, bg="#111827", borderwidth=0).pack(side="left", padx=(0, 12))
         title = tk.Label(header, textvariable=self.book_title, anchor="w", bg="#111827",
                          fg="#f9fafb", font=("Segoe UI", 18, "bold"))
-        IconButton(header, "recent", "Recent books", self.show_recent_books).pack(side="right", padx=(8, 0))
-        self.theme_button = IconButton(header, "moon", "Switch to dark mode", self.toggle_theme)
-        self.theme_button.pack(side="right", padx=(8, 0))
-        IconButton(header, "folder", "Open book …", self.choose_book).pack(side="right")
+        actions = ttk.Frame(header)
+        actions.pack(side="right")
+        self.theme_button = IconButton(actions, "moon", "Switch to dark mode", self.toggle_theme)
+        self.theme_button.pack(side="left", padx=(0, 8))
+        IconButton(actions, "recent", "Recent books", self.show_recent_books).pack(side="left", padx=(0, 8))
+        IconButton(actions, "folder", "Open book …", self.choose_book).pack(side="left")
         title.pack(side="left", fill="x", expand=True)
 
         settings = ttk.Frame(layout)
@@ -294,6 +296,7 @@ class ReadingWindow:
         self.play_button = IconButton(controls, "play", "Start reading", self.toggle_play)
         self.play_button.pack(side="left", padx=(0, 8))
         IconButton(controls, "stop", "Stop", self.stop).pack(side="left")
+        IconButton(controls, "next", "Next sentence", self.next_sentence).pack(side="left", padx=(8, 0))
         timer_controls = ttk.Frame(controls)
         timer_controls.pack(side="right")
         ttk.Label(timer_controls, text="Sleep timer:").pack(side="left", padx=(0, 6))
@@ -333,7 +336,7 @@ class ReadingWindow:
         extras = ttk.Frame(layout)
         page = ttk.Frame(layout)
         page.pack(fill="both", expand=True)
-        self.reader = HtmlBookView(page)
+        self.reader = HtmlBookView(page, on_navigate=self.navigate_link)
         self.reader.pack(fill="both", expand=True)
         self.reader.html.bind("<space>", self._space, add="+")
         self.reader.html.bind("<ButtonRelease-1>", self.click_sentence, add="+")
@@ -577,6 +580,20 @@ class ReadingWindow:
                 return
         self.seek_to_character(0)
 
+    def next_sentence(self):
+        if not self.chapters:
+            return
+        if self.preview_active:
+            self._finish_preview()
+        self._save_position()
+        current = self.reading_position[1] if self.reading_position else 0
+        for section in range(self.section, len(self.chapters)):
+            for start, _ in sentence_spans(self.chapters[section][1]):
+                if section != self.section or start > current:
+                    self.seek_to_character(start, section)
+                    return
+        self.status.set("You are at the last sentence of the book.")
+
     def set_sleep_timer(self, _event=None):
         choice = self.sleep_choice.get()
         self.sleep_deadline = None
@@ -653,10 +670,17 @@ class ReadingWindow:
     def click_sentence(self, event):
         if not self.chapters:
             return
+        if self.reader.clicked_link(event) is not None:
+            # TkinterWeb's class binding handles the hyperlink after this binding.
+            return
         position = self.reader.clicked_position(event)
         if position is not None:
             section, char = position
             self.seek_to_character(char, section)
+
+    def navigate_link(self, section, char):
+        self.seek_to_character(char, section)
+        self.reader.scroll_to(section, char)
 
     def seek_to_character(self, char, section=None):
         if not self.chapters:

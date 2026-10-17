@@ -1,7 +1,7 @@
 import React, {useEffect,useMemo,useRef,useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {BookOpen,FolderOpen,Library,Play,Pause,Square,SkipBack,SkipForward,Volume2,Gauge,Star,Headphones,RefreshCw,Bookmark,AlignCenter,Minus,Plus,Moon,Sun,X,Trash2,ChevronDown,Check,LoaderCircle,ArrowRight} from 'lucide-react';
-import {openEpub,indexDocument,textRange,clickedPart} from './lib/epub.mjs';
+import {openEpub,indexDocument,textRange,clickedPart,followBookLink} from './lib/epub.mjs';
 import {readSettings,saveSettings,listBooks,getBook,putBook,updateBook,deleteBook} from './lib/storage.mjs';
 import {request,resizeFrame} from './lib/bridge.mjs';
 import {ReaderPlayer} from './lib/player.mjs';
@@ -78,7 +78,10 @@ function App() {
       doc.documentElement.style.fontSize=settingsRef.current.fontSize+'px';
       doc.documentElement.dataset.theme=settingsRef.current.theme;
       indexRef.current=index;setIndexed(index);player.setDocument(index,restored.current);highlightKey.current='';
-      doc.addEventListener('click',event=>{const i=clickedPart(event,index);if(i!==null&&i>=0)player.jump(i);});
+      doc.addEventListener('click',event=>{
+        if (followBookLink(event,index,i=>player.jump(i),setNotice)) return;
+        const i=clickedPart(event,index);if(i!==null&&i>=0)player.jump(i);
+      });
       doc.addEventListener('keydown',event=>{if(event.code==='Space'){event.preventDefault();['playing','preparing'].includes(player.status)?player.pause():player.play();}});
     }catch(error){setNotice(error.message);}
   }

@@ -2,6 +2,7 @@ import io
 import tkinter as tk
 import unittest
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from PIL import Image
 from bs4 import BeautifulSoup
@@ -104,6 +105,36 @@ class HtmlReaderTests(unittest.TestCase):
         self.assertEqual(self.view.chapters, self.chapters)
         self.view.highlight(0, (start, end), scroll=True)
         self.assertEqual(self.view.highlighted_text, 'Ein kursiver Satz.')
+
+    def test_links_resolve_sections_body_ids_and_empty_named_anchors(self):
+        document = EpubDocument([
+            BookSection('One', 'one.xhtml', '<html><body id="opening"><h1>First heading</h1>'
+                '<p id="same">First target.</p></body></html>'),
+            BookSection('Two', 'two.xhtml', '<html><body><h1>Second heading</h1>'
+                '<p id="same">Second target.</p><a name="old note"></a>'
+                '<p>Legacy target.</p><a id="end"></a></body></html>'),
+        ])
+        document.build_page()
+        chapters = self.view.set_document(document)
+        self.view.on_navigate = Mock()
+        cases = [
+            ('reader-chapter-1', 1, 'Second heading'),
+            (fragment_id(0, 'opening'), 0, 'First heading'),
+            (fragment_id(0, 'same'), 0, 'First target.'),
+            (fragment_id(1, 'same'), 1, 'Second target.'),
+            (fragment_id(1, 'old note'), 1, 'Legacy target.'),
+        ]
+        for target, section, text in cases:
+            with self.subTest(target=target):
+                self.view.on_navigate.reset_mock()
+                self.view._link('https://epub.local/#' + target)
+                self.view.on_navigate.assert_called_once_with(section, chapters[section][1].index(text))
+        for url in ('https://example.org/#reader-chapter-0', '#missing', '#' + fragment_id(1, 'end')):
+            with self.subTest(url=url):
+                self.view.on_navigate.reset_mock()
+                self.view._link(url)
+                self.view.on_navigate.assert_not_called()
+                self.assertEqual(self.view.chapters, chapters)
 
     def test_theme_changes_colors_without_changing_offsets_or_highlight(self):
         text = self.chapters[0][1]

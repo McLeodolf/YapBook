@@ -1,13 +1,15 @@
 """Continuous HTML view with exact mappings to chapter-local speech offsets."""
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 import re
 import tkinter as tk
+from urllib.parse import unquote, urlsplit
 from tkinterweb import HtmlFrame
 
 
 class HtmlBookView(HtmlFrame):
-    def __init__(self, master):
+    def __init__(self, master, on_navigate=None):
+        self.on_navigate = on_navigate
         self.model = None
         self.chapter_ranges = []
         self.offsets = []
@@ -46,12 +48,56 @@ class HtmlBookView(HtmlFrame):
         return self.model.request_resource(url, *args)
 
     def _link(self, url):
-        fragment = url.split("#", 1)[1] if "#" in url else ""
-        if fragment:
-            try:
-                self.document.getElementById(fragment).scrollIntoView()
-            except tk.TclError:
-                pass
+        target = urlsplit(url)
+        if target.netloc and target.netloc != "epub.local":
+            return
+        if not target.fragment:
+            return
+        try:
+            element = self.document.getElementById(unquote(target.fragment))
+            position = self._node_position(element.node)
+            if self.on_navigate is not None and position is not None:
+                self.on_navigate(*position)
+            element.scrollIntoView()
+        except tk.TclError:
+            pass
+
+    def _node_position(self, target):
+        """Find the first readable text at or after an anchor in its section."""
+        ancestor = target
+        while ancestor:
+            identifier = self.html.get_node_attribute(ancestor, "id", "")
+            if identifier.startswith("reader-chapter-"):
+                section = int(identifier.removeprefix("reader-chapter-"))
+                break
+            ancestor = self.html.get_node_parent(ancestor)
+        else:
+            return None
+        offsets = self.offsets[section]
+        pending, reached = [ancestor], False
+        while pending:
+            node = pending.pop()
+            reached = reached or node == target
+            if reached and not self.html.get_node_tag(node):
+                text = self.html.get_node_text(node)
+                if text.strip():
+                    start = int(self.html.text("offset", node, 0))
+                    char = bisect_left(offsets, start)
+                    if char < len(offsets) and offsets[char] < start + len(text):
+                        return section, char
+            pending.extend(reversed(self.html.get_node_children(node)))
+        return None
+
+    def clicked_link(self, event):
+        try:
+            node, _ = self.html.node("-index", event.x, event.y)
+            while node:
+                if self.html.get_node_tag(node).lower() == "a":
+                    return self.html.get_node_attribute(node, "href", "") or None
+                node = self.html.get_node_parent(node)
+        except (tk.TclError, TypeError, ValueError):
+            pass
+        return None
 
     def set_document(self, model):
         self.model = model

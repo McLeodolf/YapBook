@@ -143,7 +143,12 @@ class EpubDocument:
         lookup = {section.name: i for i, section in enumerate(self.sections)}
         for index, section in enumerate(self.sections):
             soup = BeautifulSoup(section.markup, "html.parser")
-            body = soup.body or soup
+            body = soup.body
+            if body is None:
+                body = soup.new_tag("div")
+                for child in list(soup.contents):
+                    body.append(child.extract())
+                soup.append(body)
             base = resource_url(section.name)
             css_classes = []
             for style in soup.find_all(["style", "link"]):
@@ -173,6 +178,8 @@ class EpubDocument:
                     original = tag["id"]
                     tag["data-epub-id"] = original
                     tag["id"] = fragment_id(index, original)
+                elif tag.name == "a" and tag.get("name"):
+                    tag["id"] = fragment_id(index, tag["name"])
                 if tag.get("style"):
                     values = tinycss2.parse_component_value_list(tag["style"])
                     tag["style"] = tinycss2.serialize(rewrite_urls(values, base))
@@ -196,6 +203,9 @@ class EpubDocument:
                     replacement["alt"] = svg.get_text(" ", strip=True)
                     svg.replace_with(replacement)
             body.name = "div"
+            if body.get("id"):
+                anchor = soup.new_tag("a", id=body["id"])
+                body.insert(0, anchor)
             body["id"] = f"reader-chapter-{index}"
             body["class"] = [*body.get("class", []), "reader-body", *css_classes]
             pages.append(f'<div class="reader-divider" id="reader-marker-{index}">Section {index + 1}</div>{body}')

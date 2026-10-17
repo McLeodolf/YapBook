@@ -58,6 +58,8 @@ as book/text hashes and offsets. They contain no book text.
 
 Disable "Auto-scroll while reading" to scroll freely while playback continues.
 Clicking a sentence in any displayed section switches playback to that section.
+Internal book links jump directly to their target and start reading there, without
+speaking the clicked link label separately. The full book remains visible.
 The renderer supports HTML and CSS suitable for typical reflowable EPUBs;
 advanced browser layout, embedded web fonts and complex SVG artwork may differ
 from a full browser. EPUB resource loading stays local; book JavaScript is not run.
@@ -88,6 +90,7 @@ update its path. Add bookmark saves a named sentence; Bookmarks lists and delete
 marks for the current book. Jumping while reading resumes at the bookmark; jumping
 while stopped only restores the position. Multiple bookmarks are supported per book.
 Previous sentence starts the preceding sentence, including in the previous section.
+Next sentence starts the following sentence, including in the next section.
 Section progress measures the text position, not remaining audio time.
 
 Sleep timer offers 15 minutes, 30 minutes or End of section. Minute timers count wall

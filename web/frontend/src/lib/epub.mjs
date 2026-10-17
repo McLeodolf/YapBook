@@ -83,14 +83,20 @@ export async function openEpub(blob) {
         for (const attr of [...node.attributes]) if (attr.name === 'src' || attr.name === 'xlink:href' || attr.name === 'poster') node.setAttribute(attr.name,resource(attr.value,item.path));
         if (node.hasAttribute('style')) node.setAttribute('style',rewriteUrls(node.getAttribute('style'),item.path).replace(/position\s*:\s*(fixed|sticky)/gi,'position:static'));
         if (node.id) node.id = `s${i}-` + node.id;
+        else if (node.tagName === 'A' && node.getAttribute('name')) node.id = `s${i}-` + node.getAttribute('name');
         if (node.tagName === 'A') {
           const href = node.getAttribute('href') || '', target = local(href,item.path), section = paths.get(target), hash = href.includes('#') ? href.slice(href.indexOf('#')+1) : '';
-          if (section !== undefined) node.setAttribute('href',hash ? `#s${section}-${decodeURIComponent(hash)}` : `#section-${section}`);
+          if (node.hasAttribute('href') && section !== undefined) {
+            let fragment; try { fragment = decodeURIComponent(hash); } catch { fragment = hash; }
+            node.setAttribute('href',hash ? `#s${section}-${fragment}` : `#section-${section}`);
+          }
           else node.removeAttribute('href');
           node.removeAttribute('target');
         }
       }
-      const wrap = document.createElement('div'); wrap.append(content);
+      const wrap = document.createElement('div');
+      if (doc.body.id) { const anchor = document.createElement('a'); anchor.id = `s${i}-` + doc.body.id; wrap.append(anchor); }
+      wrap.append(content);
       const heading = wrap.querySelector('h1,h2,h3');
       return {title:heading?.textContent?.trim() || doc.title || `Section ${i+1}`, html:`<section id="section-${i}" class="book-section ${escape(doc.body.className)}" data-section="${i}" lang="${escape(language)}">${wrap.innerHTML}</section>`, css};
     });
@@ -159,4 +165,21 @@ export function clickedPart(event, index) {
     }
   }
   return null;
+}
+
+export function followBookLink(event, index, jump, missing) {
+  const anchor = event.target.closest?.('a[href]');
+  if (!anchor) return false;
+  // A fragment URL in srcdoc otherwise resolves to the containing app's URL.
+  event.preventDefault();
+  const doc = event.currentTarget, href = anchor.getAttribute('href');
+  const target = href.startsWith('#') ? doc.getElementById(href.slice(1)) : null;
+  if (!target) { missing('This link target is not included in the book.'); return true; }
+  const section = Number(target.closest('.book-section')?.dataset.section);
+  const spans = index.sections[section]?.spans || [];
+  const span = spans.find(span => target.contains(span.node) || Boolean(target.compareDocumentPosition(span.node) & 4));
+  const part = span && index.parts.findIndex(part => part.section === section && part.end > span.start);
+  if (typeof part === 'number' && part >= 0) jump(part);
+  target.scrollIntoView({block:'start'});
+  return true;
 }

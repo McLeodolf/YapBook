@@ -13,6 +13,7 @@ For the browser version and free Streamlit deployment, see [web/README.md](web/R
 - Yellow sentence highlighting synchronized to the audio.
 - Natural speech pauses at headings, paragraphs, and explicit line breaks.
 - Click any sentence to start reading from that point.
+- Follow internal book links and start reading at their destination.
 - Play, pause, resume, stop, and optional automatic scrolling.
 - Voice selection, compact speed and volume sliders, text size, and section navigation.
 - Background preparation of the next two sentences, including across section boundaries.
@@ -20,7 +21,7 @@ For the browser version and free Streamlit deployment, see [web/README.md](web/R
 - An English desktop interface and a command-line reader.
 - Voice preview, language/name filters and favorite voices.
 - Remembered voice, speed, volume, text size and auto-scroll settings.
-- Recent books, named bookmarks, previous-sentence navigation and section progress.
+- Recent books, named bookmarks, previous/next-sentence navigation and section progress.
 - A sleep timer for 15/30 minutes or the end of the current section.
 - Saved light/dark mode for the controls and book page; switch with the moon/sun icon.
 - Audio loading time and received bytes, cancellable requests and a 90-second deadline.
@@ -51,7 +52,9 @@ The short **Speed** and **Volume** sliders sit next to each other. The displayed
 
 Turn off **Auto-scroll while reading** to browse freely. Click a sentence to read from there. **Stop** resets playback to the beginning of the selected section; **Pause** keeps your position. Space pauses or resumes while the reader has keyboard focus.
 
-**Previous sentence** starts the preceding sentence, including across section boundaries. **Section progress** shows text progress through the current section, not an estimated audio duration.
+Internal book links jump directly to the target and start reading there. The clicked link label is not spoken separately. Links keep the full book visible, including when auto-scroll is off.
+
+**Previous sentence** and **Next sentence** start the adjacent sentence, including across section boundaries. **Section progress** shows text progress through the current section, not an estimated audio duration.
 
 **Recent books** remembers the 20 most recently opened EPUBs. **Add bookmark** saves the current sentence under a name. **Bookmarks** lets you return to or delete multiple bookmarks for the current book. Jumping to a bookmark while reading resumes there; while stopped it only restores the position. Moving a book preserves its bookmarks; reopen it with **Open book** to update its recent file location.
 
