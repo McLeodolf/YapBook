@@ -8,7 +8,7 @@ const archive={
  'META-INF/container.xml':strToU8('<container><rootfiles><rootfile full-path="book/package.opf"/></rootfiles></container>'),
  'book/package.opf':strToU8('<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>A Small Test Book</dc:title><dc:language>en</dc:language></metadata><manifest><item id="one" href="one.xhtml" media-type="application/xhtml+xml"/><item id="two" href="two.xhtml" media-type="application/xhtml+xml"/><item id="three" href="three.xhtml" media-type="application/xhtml+xml"/><item id="style" href="style.css" media-type="text/css"/></manifest><spine><itemref idref="one"/><itemref idref="two"/><itemref idref="three"/></spine></package>'),
  'book/style.css':strToU8('h1{color:rgb(42,94,65)}em{font-style:italic}.hidden{display:none}'),
- 'book/one.xhtml':strToU8('<html><head><link rel="stylesheet" href="style.css"/></head><body><h1>Chapter One</h1><p>A <em>beautiful</em> sentence begins here. The next sentence is ready. A third sentence follows.</p><p class="hidden">This text must not be spoken.</p><script>parent.__epubScriptRan=true</script>'+Array.from({length:10},(_,i)=>`<p>A quiet test paragraph number ${i+1}. This text is invented for testing.</p>`).join('')+'</body></html>'),
+ 'book/one.xhtml':strToU8('<html><head><link rel="stylesheet" href="style.css"/></head><body><h1>Chapter One</h1><p>Matthew C. Perry wrote a <em>beautiful</em> sentence. Im 17. Jahrhundert entstand ein kleines Dorf. Wir feiern ihren 105. Geburtstag.</p><p class="hidden">This text must not be spoken.</p><script>parent.__epubScriptRan=true</script>'+Array.from({length:10},(_,i)=>`<p>A quiet test paragraph number ${i+1}. This text is invented for testing.</p>`).join('')+'</body></html>'),
  'book/two.xhtml':strToU8('<html><body><h1>Chapter Two</h1><p>Here is a different chapter. Reading continues across chapter boundaries.</p></body></html>'),
  'book/three.xhtml':strToU8('<html><body><h1>Chapter Three</h1><p>This is the last chapter. We can return here later.</p></body></html>')
 };
@@ -37,7 +37,7 @@ try {
  await page.waitForFunction(()=>window.__commands.filter(c=>c.action==='speech').length>=3,{},{timeout:60000});
  await page.waitForTimeout(1200);
  const commands=await page.evaluate(()=>window.__commands.filter(c=>c.action==='speech'));
- assert.deepEqual(commands.slice(0,3).map(c=>c.text),['Chapter One','A beautiful sentence begins here.','The next sentence is ready.']);
+ assert.deepEqual(commands.slice(0,3).map(c=>c.text),['Chapter One','Matthew C. Perry wrote a beautiful sentence.','Im 17. Jahrhundert entstand ein kleines Dorf.']);
  assert.equal(commands.length,3,'Only current and next two sentences should be requested while paused.');
  assert.ok(commands.every(c=>c.rate===-15));
  assert.equal(await reader.locator('body').evaluate(()=>[...CSS.highlights.get('spoken')][0].toString()),'Chapter One');
@@ -52,6 +52,16 @@ try {
  assert.equal(await reader.locator('em').evaluate(e=>getComputedStyle(e).color),'rgb(213, 222, 217)');
  assert.equal(await reader.locator('body').evaluate(()=>[...CSS.highlights.get('spoken')][0].toString()),'Chapter One');
  await page.screenshot({path:'tests/web-dark.png',fullPage:true});
+ for(const sentence of ['Matthew C. Perry wrote a beautiful sentence.','Im 17. Jahrhundert entstand ein kleines Dorf.','Wir feiern ihren 105. Geburtstag.']){
+   await app.getByRole('button',{name:'Next sentence',exact:true}).click();
+   await app.locator('.status').filter({hasText:'Reading'}).waitFor({timeout:60000});
+   await page.waitForTimeout(500);
+   await app.getByRole('button',{name:'Pause',exact:true}).click();
+   assert.equal(await reader.locator('body').evaluate(()=>[...CSS.highlights.get('spoken')][0].toString()),sentence);
+ }
+ const sentenceRequests=await page.evaluate(()=>window.__commands.filter(c=>c.action==='speech').map(c=>c.text));
+ assert.ok(sentenceRequests.includes('Wir feiern ihren 105. Geburtstag.'));
+ assert.ok(!sentenceRequests.some(t=>['Matthew C.','Im 17.','Wir feiern ihren 105.'].includes(t)));
  await reader.getByRole('heading',{name:'Chapter Three'}).click();
  await app.getByRole('button',{name:'Pause',exact:true}).click();
  assert.equal(await app.getByRole('combobox',{name:'Section',exact:true}).inputValue(),'2');

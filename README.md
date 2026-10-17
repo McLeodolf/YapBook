@@ -11,6 +11,7 @@ For the browser version and free Streamlit deployment, see [web/README.md](web/R
 - Natural online voices through [edge-tts](https://github.com/rany2/edge-tts), with no API key required.
 - A continuous reader that keeps EPUB formatting, images, and adjacent sections visible.
 - Yellow sentence highlighting synchronized to the audio.
+- Context-aware sentence boundaries for common abbreviations, name initials and German ordinals such as `17. Jahrhundert` or `105. Geburtstag`, in both readers.
 - Natural speech pauses at headings, paragraphs, and explicit line breaks.
 - Click any sentence to start reading from that point.
 - Read internal book links aloud, then jump to their destination and continue reading.
@@ -63,6 +64,8 @@ Click an internal book link to hear its label first. When that audio finishes, Y
 During audio loading, the status shows elapsed seconds and the amount of audio received. A request is cancelled after 90 seconds; **Stop** cancels it immediately. Failures keep the current sentence ready to retry with **Start reading**. Slow or unavailable voices can still fail because the speech service is external. The voice list is a catalog, not a guarantee that every voice responds immediately.
 
 Each audio request contains one sentence. While it plays, the next two sentences are prepared, including across section boundaries. Exceptionally long sentences are split at around 700 characters. The status shows the actual request size. Clicking a sentence starts with that sentence, without adding several following paragraphs to the same request.
+
+Internal periods in names such as `Matthew C. Perry` and common ordinal expressions stay inside the same request and yellow highlight. Explicit paragraph and heading breaks still separate the text. If a voice returns several timing fragments for one sentence, YapBook combines their highlights; the voice service still controls pronunciation and pauses within the audio.
 
 YapBook remembers the last sentence read when you pause, stop, close the window, or open another book. Reopening that EPUB restores the sentence and its yellow highlight; select **Start reading** to continue. Audio does not start automatically. Stopping before closing still preserves the last sentence read. Each book has its own position, and renaming or moving the same EPUB keeps it. An explicit `--chapter` overrides the saved position.
 

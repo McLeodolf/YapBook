@@ -85,6 +85,64 @@ class SentenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             align_sentences('Hallo.', [dict(text='Andere Worte.', offset=0, duration=10)])
 
+    def test_internal_periods_keep_a_sentence_in_one_audio_request(self):
+        sentences = [
+            'Im 17. Jahrhundert entstand ein kleines Dorf.',
+            'Wir feiern ihren 105. Geburtstag.',
+            'wir feiern ihren 105. geburtstag.',
+            'Am 3. Mai feiern wir den 1000. Geburtstag.',
+            'Am 3. 5. 2024 wurde er geboren.',
+            'Matthew C. Perry arrived in Japan.',
+            'J. R. R. Tolkien wrote a book.',
+            'Dr. Smith met Mr. Brown.',
+            'Dr. Weber liest z. B. 3.14 Seiten.',
+            'Das ist z.B. ein Beispiel bzw. eine Erklärung.',
+            'The U.S. economy grew.',
+            'Im 17.\u00a0Jahrhundert lebte Matthew C.\u00a0Perry.',
+        ]
+        for sentence in sentences:
+            with self.subTest(sentence=sentence):
+                text = '  ' + sentence + ' Danach geht es weiter.  '
+                self.assertEqual([text[a:b] for a, b in sentence_spans(text)],
+                                 [sentence, 'Danach geht es weiter.'])
+                parts = list(text_parts(text))
+                self.assertEqual([part for _, part in parts], [sentence, 'Danach geht es weiter.'])
+                for start, part in parts:
+                    self.assertEqual(text[start:start + len(part)], part)
+
+    def test_real_sentence_ends_and_newlines_still_split(self):
+        cases = [
+            ['Er wurde 17.', 'Danach ging er nach Hause.'],
+            ['He was 105.', 'Then they celebrated.'],
+            ['This is plan A.', 'Then we try again.'],
+            ['Bring pens etc.', 'Then we start.'],
+            ['He lives in the U.S.', 'The next visitor is from Japan.'],
+            ['“Matthew C. Perry arrived.”', 'Another visitor followed.'],
+        ]
+        for expected in cases:
+            with self.subTest(expected=expected):
+                text = ' '.join(expected)
+                self.assertEqual([text[a:b] for a, b in sentence_spans(text)], expected)
+        text = '17.\nJahrhundert\nDr.\nSmith\n105.\nGeburtstag'
+        self.assertEqual([text[a:b] for a, b in sentence_spans(text)], text.splitlines())
+
+    def test_service_fragments_merge_into_one_complete_highlight(self):
+        for fragments in [
+            ['Im 17.', 'Jahrhundert entstand ein kleines Dorf.'],
+            ['Wir feiern ihren 105.', 'Geburtstag.'],
+            ['Matthew C.', 'Perry arrived in Japan.'],
+        ]:
+            with self.subTest(fragments=fragments):
+                events = [dict(text=part, offset=1_000_000 + index * 20_000_000, duration=15_000_000)
+                          for index, part in enumerate([*fragments, 'Another sentence.'])]
+                sentence = ' '.join(fragments)
+                text = '  ' + sentence + ' Another sentence.'
+                cues = align_sentences(text, events)
+                self.assertEqual([text[c.start_char:c.end_char] for c in cues], [sentence, 'Another sentence.'])
+                self.assertEqual((cues[0].start_ms, cues[0].end_ms), (100, 3600))
+                self.assertEqual(cue_at(cues, 1800), cues[0])
+                self.assertEqual(cue_at(cues, 4200), cues[1])
+
 
 class SpeechPreparationTests(unittest.IsolatedAsyncioTestCase):
     async def test_service_heading_cues_map_back_to_unmodified_book_text(self):

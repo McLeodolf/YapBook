@@ -31,6 +31,7 @@ Community Cloud hosting and its `*.streamlit.app` hostname can be free. Apps sle
 - Click an internal book link to read its label aloud first, then jump to its destination and continue reading. Pause defers the jump; Stop or another navigation cancels it. All book sections remain available for scrolling.
 - EPUBs, library entries, bookmarks, preferences and positions are stored in this browser's IndexedDB/localStorage. Nothing synchronizes between devices. Clearing browser data removes the saved library; private browsing may not keep it.
 - Only speech requests pass through Streamlit to Microsoft's online speech service. Each request is one sentence; at most the current sentence and the next two are prepared. Sentences longer than 700 characters are split into smaller parts.
+- Sentence detection keeps common abbreviations, initials such as `Matthew C. Perry`, and ordinals such as `17. Jahrhundert` and `105. Geburtstag` together. Timing fragments from the service are combined into one sentence highlight; pronunciation remains controlled by the selected voice.
 - The server keeps only the latest request/result for each session in memory. It does not store EPUBs or log their text. A closed connection may allow an already running request to finish (bounded by 90 seconds).
 - Visible speed `0%` sends `-15%` to the service. The default voice is `en-US-BrianMultilingualNeural`. Volume is local to browser playback.
 - Streamlit and the voice service have resource and availability limits. `edge-tts` uses an unofficial free service that may be slow or unavailable, particularly from some cloud networks.
@@ -48,6 +49,6 @@ node tests/browser-check.mjs
 node tests/link-check.mjs
 ```
 
-The browser check uses an invented EPUB and muted playback. It verifies real speech, exactly two preloaded sentences, formatting, all sections, clicking a sentence, bookmarking, restoring progress, light/dark mode and a narrow viewport. It never uses a book from your library.
+The browser check uses an invented EPUB and muted playback. It verifies real speech, whole-sentence requests and highlights for initials and ordinals, exactly two preloaded sentences, formatting, all sections, clicking a sentence, bookmarking, restoring progress, light/dark mode and a narrow viewport. It never uses a book from your library.
 
 The link check covers reading a label before navigation, pause/resume, cancellation, navigation within and between sections, body and named anchors, keyboard activation, and missing targets. Set `YAPBOOK_TEST_URL` to test a local server on a port other than 8501.

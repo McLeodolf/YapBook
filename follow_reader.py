@@ -65,7 +65,19 @@ def align_sentences(text, events):
         cursor = end
     if not cues:
         raise ValueError("The speech service did not return sentence timestamps.")
-    return cues
+    # Some voices report e.g. "Im 17." separately even in one audio request.
+    # Keep those timed fragments in the same logical sentence for highlighting.
+    spans = list(sentence_spans(text))
+    merged, previous = [], None
+    for cue in cues:
+        group = next((i for i, (start, end) in enumerate(spans) if start <= cue.start_char < end), None)
+        if merged and group is not None and group == previous:
+            first = merged[-1]
+            merged[-1] = SentenceCue(first.start_ms, max(first.end_ms, cue.end_ms), first.start_char, cue.end_char)
+        else:
+            merged.append(cue)
+        previous = group
+    return merged
 
 
 def cue_at(cues, position_ms):
@@ -76,28 +88,72 @@ def cue_at(cues, position_ms):
     return None
 
 
+_TITLES = {"dr.", "prof.", "mr.", "mrs.", "ms.", "st.", "rev.", "capt.", "cmdr.",
+           "lt.", "gen.", "col.", "sgt.", "adm.", "sen.", "rep."}
+_ABBREVIATIONS = {"bzw.", "z.b.", "u.a.", "d.h.", "e.g.", "i.e.", "ca.", "vgl."}
+_SENTENCE_STARTERS = set("Then However Meanwhile Finally Afterwards Next He She It They We You I The This That These Those His Her Their Another But Dann Danach Dennoch Allerdings Er Sie Es Wir Ihr Ich Das Dies Diese Dieser Dort Hier Außerdem".casefold().split())
+_ORDINAL_WORD = re.compile(r"(?:jahr(?:hundert|tausend|zehnt)?|geburtstag|tag|woche|monat|platz|rang|klasse|etage|stock|kapitel|abschnitt|band|teil|auflage|ausgabe|version|januar|februar|märz|april|mai|juni|juli|august|september|oktober|november|dezember)\w*$", re.I)
+
+
+def period_continues(text, end):
+    """Recognize internal periods without joining number-ending sentences."""
+    # Only nearby words matter; avoid rescanning a whole chapter at every dot.
+    before, after = text[max(0, end - 128):end], text[end:end + 128]
+    if not before.endswith(".") or before.endswith(".."):
+        return False
+    following = re.match(r"[^\S\r\n]+([^\W_]+)", after)
+    token = re.search(r"([^\W_]+(?:\.[^\W_]+)*\.)$", before)
+    if following is None or token is None:
+        return False
+    word, next_word = token[1], following[1]
+    lowered, next_lower = word.casefold(), next_word.casefold()
+    if lowered in _TITLES:
+        return next_word[0].isalpha() and next_lower not in _SENTENCE_STARTERS
+    if lowered in _ABBREVIATIONS or re.search(r"(?:z\.\s*b\.|u\.\s*a\.|d\.\s*h\.|e\.\s*g\.|i\.\s*e\.)$", before, re.I):
+        return next_lower not in _SENTENCE_STARTERS
+    if re.match(r"[^\S\r\n]+[A-ZÄÖÜ]\.", after) and lowered in {"z.", "u.", "d.", "e.", "i."}:
+        return True
+    if lowered in {"etc.", "usw.", "u.s.", "u.k.", "ph.d.", "m.d.", "jr.", "sr."}:
+        if next_word[0].islower():
+            return True
+    if re.fullmatch(r"(?:[A-ZÄÖÜ]\.)+", word):
+        next_initial = bool(re.match(r"[^\S\r\n]+[A-ZÄÖÜ]\.", after))
+        return (next_word[0].isupper() and (next_lower not in _SENTENCE_STARTERS or next_initial)
+                or next_lower in {"de", "del", "van", "von"})
+    if lowered in {"nr.", "no.", "fig.", "vol.", "pp.", "p.", "art."}:
+        return next_word[0].isdigit()
+    if re.fullmatch(r"\d+\.", word):
+        date_year = bool(re.search(r"\b\d{1,2}\.[^\S\r\n]*\d{1,2}\.$", before)
+                         and re.fullmatch(r"\d{4}", next_word))
+        return (next_word[0].islower() or bool(_ORDINAL_WORD.fullmatch(next_word))
+                or bool(re.match(r"[^\S\r\n]+\d+\.", after)) or date_year)
+    return False
+
+
 def sentence_spans(text):
-    """Find a starting sentence before its audio timestamps have been loaded."""
-    abbreviations = {"dr.", "prof.", "mr.", "mrs.", "ms.", "st.", "bzw.",
-                     "z.b.", "u.a.", "d.h.", "e.g.", "i.e.", "usw.", "etc.",
-                     "z.", "b.", "u.", "a.", "d.", "h.", "ca.", "vgl.", "nr."}
+    """Find logical sentences, preserving heading and paragraph boundaries."""
     start = 0
     for boundary in re.finditer(r'[.!?]+[\"\u201d\u201c\u2019\u00bb)\]]*(?=\s+|$)|\n+', text):
         preceding = text[start:boundary.end()].rstrip()
         if not preceding:
             start = boundary.end()
             continue
-        last_word = preceding.split()[-1].casefold()
-        if not boundary.group().startswith("\n") and (last_word in abbreviations or re.fullmatch(r"[A-ZÄÖÜ]\.", preceding.split()[-1])):
+        if not boundary.group().startswith("\n") and period_continues(text, boundary.end()):
             continue
         end = start + len(text[start:boundary.end()].rstrip())
+        while start < end and text[start].isspace():
+            start += 1
         if start < end:
             yield start, end
         start = boundary.end()
         while start < len(text) and text[start].isspace():
             start += 1
     if start < len(text):
-        yield start, len(text)
+        end = len(text.rstrip())
+        while start < end and text[start].isspace():
+            start += 1
+        if start < end:
+            yield start, end
 
 
 async def generate_audio(text, voice, rate, cancelled, progress=None):

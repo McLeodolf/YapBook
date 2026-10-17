@@ -1,13 +1,45 @@
 export const DEFAULT_VOICE = 'en-US-BrianMultilingualNeural';
+const titles = new Set('dr. prof. mr. mrs. ms. st. rev. capt. cmdr. lt. gen. col. sgt. adm. sen. rep.'.split(' '));
+const abbreviations = new Set('bzw. z.b. u.a. d.h. e.g. i.e. ca. vgl.'.split(' '));
+const sentenceStarters = new Set('Then However Meanwhile Finally Afterwards Next He She It They We You I The This That These Those His Her Their Another But Dann Danach Dennoch Allerdings Er Sie Es Wir Ihr Ich Das Dies Diese Dieser Dort Hier Außerdem'.toLowerCase().split(' '));
+const ordinalWord = /^(?:jahr(?:hundert|tausend|zehnt)?|geburtstag|tag|woche|monat|platz|rang|klasse|etage|stock|kapitel|abschnitt|band|teil|auflage|ausgabe|version|januar|februar|märz|april|mai|juni|juli|august|september|oktober|november|dezember)\p{L}*$/iu;
+
+function periodContinues(text, end) {
+  // Only nearby words matter; avoid rescanning a whole chapter at every dot.
+  const before=text.slice(Math.max(0,end-128),end), after=text.slice(end,end+128);
+  if (!before.endsWith('.') || before.endsWith('..')) return false;
+  const following=after.match(/^[^\S\r\n]+([\p{L}\p{N}]+)/u), token=before.match(/([\p{L}\p{N}]+(?:\.[\p{L}\p{N}]+)*\.)$/u);
+  if (!following || !token) return false;
+  const word=token[1], next=following[1], lower=word.toLowerCase(), nextLower=next.toLowerCase();
+  if (titles.has(lower)) return /^\p{L}/u.test(next) && !sentenceStarters.has(nextLower);
+  if (abbreviations.has(lower) || /(?:z\.\s*b\.|u\.\s*a\.|d\.\s*h\.|e\.\s*g\.|i\.\s*e\.)$/i.test(before)) return !sentenceStarters.has(nextLower);
+  const nextInitial=/^[^\S\r\n]+\p{Lu}\./u.test(after);
+  if (nextInitial && ['z.','u.','d.','e.','i.'].includes(lower)) return true;
+  if (['etc.','usw.','u.s.','u.k.','ph.d.','m.d.','jr.','sr.'].includes(lower) && /^\p{Ll}/u.test(next)) return true;
+  if (/^(?:\p{Lu}\.)+$/u.test(word)) return /^\p{Lu}/u.test(next) && (!sentenceStarters.has(nextLower) || nextInitial) || ['de','del','van','von'].includes(nextLower);
+  if (['nr.','no.','fig.','vol.','pp.','p.','art.'].includes(lower)) return /^\d/.test(next);
+  if (/^\d+\.$/.test(word)) {
+    const dateYear=/\b\d{1,2}\.[^\S\r\n]*\d{1,2}\.$/.test(before) && /^\d{4}$/.test(next);
+    return /^\p{Ll}/u.test(next) || ordinalWord.test(next) || /^[^\S\r\n]+\d+\./.test(after) || dateYear;
+  }
+  return false;
+}
+
 export function sentenceSpans(text, locale = 'en') {
   const result = [];
   const segmenter = new Intl.Segmenter(locale, { granularity: 'sentence' });
   for (const line of text.matchAll(/[^\n]+/g)) {
+    let pending = null;
     for (const segment of segmenter.segment(line[0])) {
       const leading = segment.segment.length - segment.segment.trimStart().length;
       const value = segment.segment.trim();
-      if (value) result.push([line.index + segment.index + leading, line.index + segment.index + leading + value.length]);
+      if (!value) continue;
+      const start=line.index+segment.index+leading, end=start+value.length;
+      pending ??= start;
+      if (periodContinues(text,end)) continue;
+      result.push([pending,end]); pending=null;
     }
+    if (pending !== null) result.push([pending,line.index+line[0].trimEnd().length]);
   }
   return result;
 }
@@ -53,7 +85,17 @@ export function alignBoundaries(text, events) {
     cursor = end;
   }
   if (!cues.length) throw new Error('This voice returned no sentence timing. Please retry or choose another voice.');
-  return cues;
+  // The service can report fragments at ordinal/initial periods; highlight one sentence.
+  const spans=sentenceSpans(text), merged=[];
+  let previous=-1;
+  for (const cue of cues) {
+    const group=spans.findIndex(([start,end])=>start<=cue.start && cue.start<end);
+    if (merged.length && group>=0 && group===previous) {
+      const first=merged.at(-1); first.end=cue.end; first.until=Math.max(first.until,cue.until);
+    } else merged.push({...cue});
+    previous=group;
+  }
+  return merged;
 }
 
 export class SentenceQueue {
