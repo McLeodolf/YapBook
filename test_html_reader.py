@@ -1,13 +1,16 @@
 import io
 import tkinter as tk
 import unittest
+import tempfile
+from pathlib import Path
+from zipfile import ZipFile
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 from PIL import Image
 from bs4 import BeautifulSoup
 
-from epub_document import BookSection, EpubDocument, fragment_id
+from epub_document import BookSection, EpubDocument, fragment_id, read_document
 from html_reader import HtmlBookView
 
 
@@ -128,13 +131,31 @@ class HtmlReaderTests(unittest.TestCase):
             with self.subTest(target=target):
                 self.view.on_navigate.reset_mock()
                 self.view._link('https://epub.local/#' + target)
-                self.view.on_navigate.assert_called_once_with(section, chapters[section][1].index(text))
+                self.view.on_navigate.assert_called_once_with(section, chapters[section][1].index(text), None)
         for url in ('https://example.org/#reader-chapter-0', '#missing', '#' + fragment_id(1, 'end')):
             with self.subTest(url=url):
                 self.view.on_navigate.reset_mock()
                 self.view._link(url)
                 self.view.on_navigate.assert_not_called()
                 self.assertEqual(self.view.chapters, chapters)
+
+    def test_epub_import_keeps_body_anchors_and_original_styles(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'body-anchor.epub'
+            with ZipFile(path, 'w') as archive:
+                archive.writestr('mimetype', 'application/epub+zip')
+                archive.writestr('META-INF/container.xml', '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0"><rootfiles><rootfile full-path="book.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
+                archive.writestr('book.opf', '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">test</dc:identifier><dc:title>Sample</dc:title><dc:language>en</dc:language></metadata><manifest><item id="one" href="one.xhtml" media-type="application/xhtml+xml"/><item id="two" href="two.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/><itemref idref="two"/></spine></package>')
+                archive.writestr('one.xhtml', '<html><body><p><a href="two.xhtml#original-body">Open the chapter</a></p></body></html>')
+                archive.writestr('two.xhtml', '<html><head><style>body.special p {color:#246824}</style></head><body id="original-body" class="special"><p>Destination sentence.</p></body></html>')
+            document = read_document(path)
+        chapters = self.view.set_document(document)
+        self.view.on_navigate = Mock()
+        self.view._link('#' + fragment_id(1, 'original-body'))
+        self.view.on_navigate.assert_called_once_with(1, 0, None)
+        self.assertEqual(chapters[1][1], 'Destination sentence.')
+        paragraph = self.view.html.search('#reader-chapter-1 p')[0]
+        self.assertEqual(self.view.html.get_node_property(paragraph, 'color'), '#246824')
 
     def test_theme_changes_colors_without_changing_offsets_or_highlight(self):
         text = self.chapters[0][1]

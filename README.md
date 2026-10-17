@@ -13,7 +13,7 @@ For the browser version and free Streamlit deployment, see [web/README.md](web/R
 - Yellow sentence highlighting synchronized to the audio.
 - Natural speech pauses at headings, paragraphs, and explicit line breaks.
 - Click any sentence to start reading from that point.
-- Follow internal book links and start reading at their destination.
+- Read internal book links aloud, then jump to their destination and continue reading.
 - Play, pause, resume, stop, and optional automatic scrolling.
 - Voice selection, compact speed and volume sliders, text size, and section navigation.
 - Background preparation of the next two sentences, including across section boundaries.
@@ -52,7 +52,7 @@ The short **Speed** and **Volume** sliders sit next to each other. The displayed
 
 Turn off **Auto-scroll while reading** to browse freely. Click a sentence to read from there. **Stop** resets playback to the beginning of the selected section; **Pause** keeps your position. Space pauses or resumes while the reader has keyboard focus.
 
-Internal book links jump directly to the target and start reading there. The clicked link label is not spoken separately. Links keep the full book visible, including when auto-scroll is off.
+Click an internal book link to hear its label first. When that audio finishes, YapBook jumps to the target and continues reading there. Pause defers the jump; Stop or another navigation cancels it. Links keep the full book visible, including when auto-scroll is off.
 
 **Previous sentence** and **Next sentence** start the adjacent sentence, including across section boundaries. **Section progress** shows text progress through the current section, not an estimated audio duration.
 

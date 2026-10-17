@@ -183,6 +183,7 @@ class ReadingWindow:
         self.settings_timer = None
         self.settings_warning_shown = False
         self.preview_active = False
+        self.link_target = None
         self.progress_events = queue.Queue()
         self.request_progress = {}
         self.loading_since = 0
@@ -336,7 +337,7 @@ class ReadingWindow:
         extras = ttk.Frame(layout)
         page = ttk.Frame(layout)
         page.pack(fill="both", expand=True)
-        self.reader = HtmlBookView(page, on_navigate=self.navigate_link)
+        self.reader = HtmlBookView(page, on_navigate=self.navigate_link, on_link_error=self.status.set)
         self.reader.pack(fill="both", expand=True)
         self.reader.html.bind("<space>", self._space, add="+")
         self.reader.html.bind("<ButtonRelease-1>", self.click_sentence, add="+")
@@ -647,7 +648,8 @@ class ReadingWindow:
         elapsed = int(time.monotonic() - self.loading_since)
         received = self.request_progress.get(self.waiting_for, 0)
         detail = f"{received / 1024:.1f} KB received" if received else "Waiting for voice service"
-        target = "voice preview" if self.preview_active else f"section {self.section + 1}, part {self.part + 1}/{len(self.parts)}"
+        target = ("voice preview" if self.preview_active else "link text" if self.link_target is not None
+                  else f"section {self.section + 1}, part {self.part + 1}/{len(self.parts)}")
         if not self.preview_active:
             target += f" · {len(self.parts[self.part][1])} characters"
         self.status.set(f"Preparing {target} · {elapsed}s · {detail} · Stop to cancel")
@@ -670,21 +672,39 @@ class ReadingWindow:
     def click_sentence(self, event):
         if not self.chapters:
             return
-        if self.reader.clicked_link(event) is not None:
-            # TkinterWeb's class binding handles the hyperlink after this binding.
-            return
+        link = self.reader.clicked_link(event)
+        if link is not None:
+            if not self.reader.get_selection():
+                self.reader.activate_link(link)
+            # Own the click so TkinterWeb cannot navigate before speech finishes.
+            return "break"
         position = self.reader.clicked_position(event)
         if position is not None:
             section, char = position
             self.seek_to_character(char, section)
 
-    def navigate_link(self, section, char):
+    def navigate_link(self, section, char, source=None):
+        if source is not None:
+            self.stop(reset_timer=False)
+            source_section, start, end = source
+            if self.section != source_section:
+                self.section = source_section
+                self._show_chapter(scroll=False)
+            label = self.chapters[source_section][1][start:end]
+            self.parts = [(start + offset, text) for offset, text in text_parts(label)]
+            self.part = 0
+            self.link_target = (section, char)
+            self._highlight((start, end))
+            self.toggle_play()
+            return
         self.seek_to_character(char, section)
         self.reader.scroll_to(section, char)
 
     def seek_to_character(self, char, section=None):
         if not self.chapters:
             return
+        if self.link_target is not None:
+            self.stop(reset_timer=False)
         if self.preview_active:
             self._finish_preview()
         if section is not None and section != self.section:
@@ -899,6 +919,8 @@ class ReadingWindow:
     def _upcoming_parts(self):
         for start, text in self.parts[self.part:]:
             yield (self.section, start), text
+        if self.link_target is not None:
+            return
         for section in range(self.section + 1, len(self.chapters)):
             for start, text in text_parts(self.chapters[section][1]):
                 yield (section, start), text
@@ -946,7 +968,10 @@ class ReadingWindow:
         self.request_progress.clear()
 
     def _playing_status(self):
-        self.status.set(f"Reading · Section {self.section + 1}/{len(self.chapters)} · Part {self.part + 1}/{len(self.parts)}")
+        if self.link_target is not None:
+            self.status.set("Reading link · Its destination opens when playback finishes.")
+        else:
+            self.status.set(f"Reading · Section {self.section + 1}/{len(self.chapters)} · Part {self.part + 1}/{len(self.parts)}")
 
     def _advance_section(self):
         for index in range(self.section + 1, len(self.chapters)):
@@ -1007,7 +1032,12 @@ class ReadingWindow:
                     self.part += 1
                     if self.part == len(self.parts):
                         self._update_progress(complete=True)
-                        if self.sleep_section == self.section:
+                        if self.link_target is not None:
+                            destination = self.link_target
+                            self.link_target = None
+                            self._set_state("idle")
+                            self.navigate_link(*destination)
+                        elif self.sleep_section == self.section:
                             self._cancel_pending_audio()
                             if not self._advance_section():
                                 self._prepare_parts()
@@ -1073,6 +1103,7 @@ class ReadingWindow:
                 messagebox.showwarning("YapBook · Reading position", "Could not save the reading position on this computer.", parent=self.root)
 
     def stop(self, reset_timer=True):
+        self.link_target = None
         if self.preview_active:
             self._finish_preview()
             if reset_timer:

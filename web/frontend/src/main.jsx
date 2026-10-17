@@ -52,14 +52,14 @@ function App() {
   useEffect(()=>{if(playback.status!=='preparing'){setElapsed(0);return;}const started=Date.now();const timer=setInterval(()=>setElapsed(Math.floor((Date.now()-started)/1000)),1000);return()=>clearInterval(timer);},[playback.status,playback.index]);
   useEffect(()=>{
     if(!part||!frame.current?.contentDocument||playback.preview)return;
-    const doc=frame.current.contentDocument,cue=playback.cue;
-    const start=part.start+(cue?.start||0),end=cue?part.start+cue.end:part.end,key=`${part.section}:${start}:${end}`;
-    const range=textRange(doc,indexed.sections[part.section],start,end); if(!range)return;
+    const doc=frame.current.contentDocument,cue=playback.link?null:playback.cue,shown=playback.link||part;
+    const start=shown.start+(cue?.start||0),end=cue?shown.start+cue.end:shown.end,key=`${shown.section}:${start}:${end}`;
+    const range=textRange(doc,indexed.sections[shown.section],start,end); if(!range)return;
     if(doc.defaultView.CSS.highlights) doc.defaultView.CSS.highlights.set('spoken',new doc.defaultView.Highlight(range));
     else {const selection=doc.getSelection();selection.removeAllRanges();selection.addRange(range);}
     if(key!==highlightKey.current&&settings.follow){const rect=range.getBoundingClientRect();if(rect.top<70||rect.bottom>doc.defaultView.innerHeight-70)doc.defaultView.scrollBy({top:rect.top-doc.defaultView.innerHeight*0.32,behavior:'smooth'});}
     highlightKey.current=key;
-  },[indexed,part,playback.cue,playback.preview,settings.follow,viewportRevision]);
+  },[indexed,part,playback.cue,playback.preview,playback.link,settings.follow,viewportRevision]);
 
   async function openFile(blob) {
     const token=++openGeneration.current;player.stop();setOpening(true);setNotice('');setPanel('');
@@ -79,7 +79,7 @@ function App() {
       doc.documentElement.dataset.theme=settingsRef.current.theme;
       indexRef.current=index;setIndexed(index);player.setDocument(index,restored.current);highlightKey.current='';
       doc.addEventListener('click',event=>{
-        if (followBookLink(event,index,i=>player.jump(i),setNotice)) return;
+        if (followBookLink(event,index,(text,complete,span)=>player.readLink(text,complete,span),i=>player.jump(i),setNotice)) return;
         const i=clickedPart(event,index);if(i!==null&&i>=0)player.jump(i);
       });
       doc.addEventListener('keydown',event=>{if(event.code==='Space'){event.preventDefault();['playing','preparing'].includes(player.status)?player.pause():player.play();}});

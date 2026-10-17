@@ -114,7 +114,7 @@ class FeatureWindowTests(unittest.TestCase):
     wait_until = fixtures.WindowTests.wait_until
     queue_audio = fixtures.WindowTests.queue_audio
 
-    def test_actual_hyperlink_click_reads_destination_once(self):
+    def test_actual_hyperlink_click_reads_label_then_destination_once(self):
         from epub_document import BookSection, EpubDocument
         document = EpubDocument([
             BookSection('One', 'one.xhtml', '<p>Opening sentence.</p><p><a href="two.xhtml#note"><em>Open target</em></a></p>' + '<p>Spacer text.</p>' * 25),
@@ -139,10 +139,57 @@ class FeatureWindowTests(unittest.TestCase):
             for event in ('<Motion>', '<ButtonPress-1>', '<ButtonRelease-1>'):
                 self.app.reader.html.event_generate(event, x=x, y=y)
             self.root.update()
+            self.assertEqual(self.app.section, 0)
+            self.assertEqual(self.app.reader.highlighted_text, 'Open target')
+            request.assert_called_once()
+            self.assertEqual(self.app.parts[0][1], 'Open target')
+            self.assertEqual(list(self.app._upcoming_parts()), [((0, char - 3), 'Open target')])
+            self.app.player.state = 'playing'
+            self.app._set_state('playing')
+            self.poll_once()
+            self.assertEqual(self.app.section, 0)
+            self.app.player.state = 'stopped'
+            self.poll_once()
             self.assertEqual(self.app.section, 1)
             self.assertEqual(self.app.reader.highlighted_text, 'Target sentence.')
-            request.assert_called_once()
+            self.assertEqual(request.call_count, 2)
             self.assertEqual(self.app.parts[0][1], 'Target sentence.')
+
+    def test_link_pause_resume_then_jump_within_same_section(self):
+        with patch.object(self.app, '_request_part') as request:
+            self.app.navigate_link(0, 13, (0, 0, 6))
+            self.app.player.state = 'playing'
+            self.app._set_state('playing')
+            self.app.toggle_play()
+            self.poll_once()
+            self.assertEqual(self.app.link_target, (0, 13))
+            self.assertEqual(request.call_count, 1)
+            self.app.toggle_play()
+            self.app.player.state = 'stopped'
+            self.poll_once()
+            self.assertIsNone(self.app.link_target)
+            self.assertEqual(self.app.parts[0][0], 13)
+            self.assertEqual(request.call_count, 2)
+
+    def test_stop_and_other_sentence_cancel_pending_link_navigation(self):
+        with patch.object(self.app, '_request_part'):
+            self.app.navigate_link(1, 0, (0, 0, 6))
+            self.app.stop()
+            self.poll_once()
+            self.assertIsNone(self.app.link_target)
+            self.assertEqual(self.app.section, 0)
+            self.app.navigate_link(1, 0, (0, 0, 6))
+            self.app.seek_to_character(13, 0)
+            self.assertIsNone(self.app.link_target)
+            self.assertEqual(self.app.parts[0][0], 13)
+
+    def test_link_audio_error_does_not_jump_to_destination(self):
+        with patch('follow_reader.messagebox.showerror'), patch.object(self.app, '_request_part'):
+            self.app.navigate_link(1, 0, (0, 0, 6))
+            self.app._error('Test failure')
+            self.poll_once()
+            self.assertIsNone(self.app.link_target)
+            self.assertEqual(self.app.section, 0)
 
     def test_next_sentence_skips_empty_sections_and_stays_at_book_end(self):
         from epub_document import EpubDocument

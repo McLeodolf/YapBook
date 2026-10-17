@@ -8,8 +8,9 @@ from tkinterweb import HtmlFrame
 
 
 class HtmlBookView(HtmlFrame):
-    def __init__(self, master, on_navigate=None):
+    def __init__(self, master, on_navigate=None, on_link_error=None):
         self.on_navigate = on_navigate
+        self.on_link_error = on_link_error
         self.model = None
         self.chapter_ranges = []
         self.offsets = []
@@ -47,7 +48,10 @@ class HtmlBookView(HtmlFrame):
             raise OSError("No EPUB loaded")
         return self.model.request_resource(url, *args)
 
-    def _link(self, url):
+    def activate_link(self, node):
+        self._link(self.html.get_node_attribute(node, "href", ""), node)
+
+    def _link(self, url, source=None):
         target = urlsplit(url)
         if target.netloc and target.netloc != "epub.local":
             return
@@ -57,10 +61,29 @@ class HtmlBookView(HtmlFrame):
             element = self.document.getElementById(unquote(target.fragment))
             position = self._node_position(element.node)
             if self.on_navigate is not None and position is not None:
-                self.on_navigate(*position)
-            element.scrollIntoView()
+                self.on_navigate(*position, self._node_span(source) if source else None)
+            else:
+                element.scrollIntoView()
         except tk.TclError:
-            pass
+            if self.on_link_error is not None:
+                self.on_link_error("This link target is not included in the book.")
+
+    def _node_span(self, node):
+        position = self._node_position(node)
+        if position is None:
+            return None
+        section, start = position
+        offsets = self.offsets[section]
+        end, pending = start, [node]
+        while pending:
+            current = pending.pop()
+            if not self.html.get_node_tag(current):
+                text = self.html.get_node_text(current)
+                if text.strip():
+                    raw = int(self.html.text("offset", current, 0))
+                    end = max(end, bisect_left(offsets, raw + len(text)))
+            pending.extend(reversed(self.html.get_node_children(current)))
+        return (section, start, end) if end > start else None
 
     def _node_position(self, target):
         """Find the first readable text at or after an anchor in its section."""
@@ -93,7 +116,7 @@ class HtmlBookView(HtmlFrame):
             node, _ = self.html.node("-index", event.x, event.y)
             while node:
                 if self.html.get_node_tag(node).lower() == "a":
-                    return self.html.get_node_attribute(node, "href", "") or None
+                    return node if self.html.get_node_attribute(node, "href", "") else None
                 node = self.html.get_node_parent(node)
         except (tk.TclError, TypeError, ValueError):
             pass

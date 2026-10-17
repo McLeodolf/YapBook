@@ -167,7 +167,7 @@ export function clickedPart(event, index) {
   return null;
 }
 
-export function followBookLink(event, index, jump, missing) {
+export function followBookLink(event, index, readLink, jump, missing) {
   const anchor = event.target.closest?.('a[href]');
   if (!anchor) return false;
   // A fragment URL in srcdoc otherwise resolves to the containing app's URL.
@@ -179,7 +179,13 @@ export function followBookLink(event, index, jump, missing) {
   const spans = index.sections[section]?.spans || [];
   const span = spans.find(span => target.contains(span.node) || Boolean(target.compareDocumentPosition(span.node) & 4));
   const part = span && index.parts.findIndex(part => part.section === section && part.end > span.start);
-  if (typeof part === 'number' && part >= 0) jump(part);
-  target.scrollIntoView({block:'start'});
+  const sourceSection = Number(anchor.closest('.book-section')?.dataset.section);
+  const sourceSpans = index.sections[sourceSection]?.spans.filter(span => anchor.contains(span.node)) || [];
+  const source = sourceSpans.length ? {section:sourceSection,start:sourceSpans[0].start,end:sourceSpans.at(-1).end} : null;
+  const label = source ? index.sections[sourceSection].text.slice(source.start,source.end) : anchor.textContent.trim();
+  readLink(label, () => {
+    if (typeof part === 'number' && part >= 0) jump(part);
+    target.scrollIntoView({block:'start'});
+  }, source);
   return true;
 }

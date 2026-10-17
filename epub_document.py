@@ -230,7 +230,8 @@ class EpubDocument:
 
 def read_document(path):
     book = epub.read_epub(str(Path(path)), options={"ignore_ncx": True})
-    assets = {item.get_name(): (item.get_content(), item.media_type) for item in book.get_items()}
+    # get_content() rebuilds XHTML and drops original body IDs, styles and classes.
+    assets = {item.get_name(): (item.content, item.media_type) for item in book.get_items()}
     sections = []
     for item_id, linear in book.spine:
         item = book.get_item_with_id(item_id)
@@ -238,7 +239,7 @@ def read_document(path):
             continue
         if isinstance(item, epub.EpubNav) or "nav" in getattr(item, "properties", []):
             continue
-        markup = item.get_content().decode("utf-8-sig")
+        markup = item.content.decode("utf-8-sig")
         soup = BeautifulSoup(markup, "html.parser")
         heading = soup.find(["h1", "h2", "h3"])
         title = heading.get_text(" ", strip=True) if heading else item.get_name()
