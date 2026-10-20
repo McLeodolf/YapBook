@@ -108,17 +108,38 @@ The artwork in `assets/` is bundled into the EXE for its Explorer, taskbar, Alt-
 .\.venv\Scripts\python.exe .\read_epub.py --list-voices en
 ```
 
-See [README.txt](README.txt) for the full usage guide, including text preview and starting from a particular section.
+```powershell
+# Start at section 3
+.\.venv\Scripts\python.exe .\read_epub.py "book.epub" --chapter 3
+
+# Preview extracted text without sending it to the speech service
+.\.venv\Scripts\python.exe .\read_epub.py "book.epub" --chapter 3 --preview
+
+# Read a German book with a German voice
+.\.venv\Scripts\python.exe .\read_epub.py "book.epub" --voice de-DE-KatjaNeural
+```
+
+Section numbers follow the EPUB's internal reading order and may differ from printed chapter numbers. Press Ctrl+C to stop the plain CLI.
 
 ## Tests
 
 Run the local tests on Windows:
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest test_follow_reader test_html_reader test_reading_positions test_app_state -v
+.\.venv\Scripts\python.exe -m unittest discover -s . -p "test_*.py" -v
 ```
 
 These tests use generated sample text and do not call the online speech service. `verify_live_follow.py`, `verify_live_prefetch.py`, and `verify_live_paragraphs.py` are separate, optional online integration checks using invented text and muted playback.
+
+The web backend tests run from `web/` with `python -m unittest discover -s tests -v`.
+Frontend checks run from `web/frontend/` with `npm ci --ignore-scripts`,
+`npm run lint`, `npm test`, and `npm run test:browser`. Install Chromium first
+with `npx playwright install chromium` when using the CI browser configuration.
+
+GitHub Actions runs the app tests and frontend build for pull requests. The
+manual **Build Windows EXE** workflow creates a downloadable EXE artifact.
+Routine dependency updates are grouped weekly, with at most one open frontend
+update PR and one GitHub Actions update PR. Security updates remain separate.
 
 ## Limitations
 
@@ -126,11 +147,3 @@ These tests use generated sample text and do not call the online speech service.
 - Complex browser layouts, embedded web fonts, and advanced SVG artwork may render differently.
 - The next two audio chunks are prepared in the background to reduce loading pauses. Slow service responses or brief player transitions can still cause gaps.
 - The desktop interface and Windows audio player cannot run in a web browser; a hosted version needs a browser reader and audio player.
-# Development quality gates
-
-The quality-gate framework and its current activation status are documented in
-[the assessment](docs/quality/01-assessment.md),
-[operations and validation](docs/quality/05-operations-and-validation.md), and
-[the readiness report](docs/quality/06-readiness.md).
-Run `python -m quality.run` from a prepared development environment. Local results
-do not replace independent review or verified GitHub merge protection.

@@ -1,4 +1,0 @@
--r ../requirements.in
--r ../web/requirements.in
--r requirements.in
-pyinstaller==6.22.3

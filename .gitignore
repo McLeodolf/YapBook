@@ -25,4 +25,3 @@ test-output/
 .coverage*
 .mypy_cache/
 .ruff_cache/
-quality/bin/

@@ -1,14 +1,11 @@
 import {test as base, expect} from '@playwright/test';
 import {zipSync, strToU8} from 'fflate';
-import {mkdirSync, writeFileSync} from 'node:fs';
-import path from 'node:path';
-import v8ToIstanbul from 'v8-to-istanbul';
 
 function makeBook(body = '<p>Evidence (Smith et al., 2021) supports this [12].</p><p>A second invented sentence.</p><a href="b.xhtml#target">Read the destination</a>') {
   const files = {
     mimetype: 'application/epub+zip',
     'META-INF/container.xml': '<container><rootfiles><rootfile full-path="book/package.opf"/></rootfiles></container>',
-    'book/package.opf': '<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>Quality fixture</dc:title><dc:language>en</dc:language></metadata><manifest><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/><item id="b" href="b.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/><itemref idref="b"/></spine></package>',
+    'book/package.opf': '<package xmlns:dc="http://purl.org/dc/elements/1.1/"><metadata><dc:title>Reader fixture</dc:title><dc:language>en</dc:language></metadata><manifest><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/><item id="b" href="b.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="a"/><itemref idref="b"/></spine></package>',
     'book/a.xhtml': '<html><body>' + body + '</body></html>',
     'book/b.xhtml': '<html><body><p id="target">The search destination is in the next section.</p><p>Matthew C. Perry visited in the 17. Jahrhundert.</p></body></html>',
   };
@@ -16,8 +13,7 @@ function makeBook(body = '<p>Evidence (Smith et al., 2021) supports this [12].</
 }
 
 const test = base.extend({
-  page: async ({page}, use, info) => {
-    await page.coverage.startJSCoverage({resetOnNavigation: false});
+  page: async ({page}, use) => {
     await page.route('**/*', route => {
       const url = new URL(route.request().url());
       return url.hostname === '127.0.0.1' ? route.continue() : route.abort();
@@ -53,19 +49,7 @@ const test = base.extend({
       });
     });
     await use(page);
-    const entries = await page.coverage.stopJSCoverage();
-    const coverage = {};
-    for (const entry of entries) {
-      const url = new URL(entry.url || 'about:blank');
-      if (url.hostname !== '127.0.0.1' || !url.pathname.startsWith('/src/')) continue;
-      const filename = path.resolve(url.pathname.slice(1));
-      const converter = v8ToIstanbul(filename, 0, {source: entry.source});
-      await converter.load();
-      converter.applyCoverage(entry.functions);
-      Object.assign(coverage, converter.toIstanbul());
-    }
-    mkdirSync('test-output/browser-coverage', {recursive: true});
-    writeFileSync(`test-output/browser-coverage/${info.testId.replace(/[^a-z0-9]/gi, '_')}.json`, JSON.stringify(coverage));
+
   },
 });
 
