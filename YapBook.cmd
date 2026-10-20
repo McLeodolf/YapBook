@@ -1,3 +1,8 @@
 @echo off
-"%~dp0.venv\Scripts\python.exe" "%~dp0read_epub.py" --follow %*
-if errorlevel 1 pause
+setlocal
+pushd "%~dp0" || exit /b 1
+"%~dp0.venv\Scripts\python.exe" -m yapbook.read_epub --follow %*
+set "readerExitCode=%errorlevel%"
+popd
+if not "%readerExitCode%"=="0" pause
+exit /b %readerExitCode%

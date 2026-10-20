@@ -8,7 +8,8 @@ import time
 
 import edge_tts
 
-_CAPACITY = threading.BoundedSemaphore(4)
+MAX_SESSION_JOBS = 6  # Current sentence plus five upcoming sentences.
+_CAPACITY = threading.BoundedSemaphore(MAX_SESSION_JOBS)
 _VOICE = re.compile(r"[a-z]{2,3}-[A-Z]{2}-[A-Za-z0-9]+Neural")
 
 
@@ -128,7 +129,7 @@ class SpeechSession:
 
 
 class SpeechPool:
-    """Three independent jobs: current sentence and two following sentences."""
+    """Six independent jobs: current sentence and five following sentences."""
     def __init__(self):
         self.jobs = {}
         self.acked = set()
@@ -140,7 +141,7 @@ class SpeechPool:
         if not isinstance(command, dict) or command.get("action") != "batch":
             return
         requests, ack = command.get("requests"), command.get("ack")
-        if not isinstance(requests, list) or len(requests) > 3 or not isinstance(ack, list) or len(ack) > 100:
+        if not isinstance(requests, list) or len(requests) > MAX_SESSION_JOBS or not isinstance(ack, list) or len(ack) > 100:
             return
         self.acked = {key for key in ack if isinstance(key, str) and len(key) <= 100}
         for key in self.acked:
@@ -153,7 +154,7 @@ class SpeechPool:
             except ValueError:
                 continue
             key = request["id"]
-            if key in self.jobs or key in self.acked or len(self.jobs) >= 3:
+            if key in self.jobs or key in self.acked or len(self.jobs) >= MAX_SESSION_JOBS:
                 continue
             job = self.jobs[key] = SpeechSession()
             job.submit(request)

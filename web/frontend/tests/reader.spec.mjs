@@ -22,6 +22,15 @@ const test = base.extend({
       window.__speech = [];
       window.__audio = [];
       window.__seen = new Map();
+      window.__heldSpeech = new Map();
+      window.__holdSpeech = false;
+      window.__resolveSpeech = text => {
+        const request = window.__speech.find(request => request.text === text);
+        const reply = window.__heldSpeech.get(request?.id);
+        if (!reply) throw new Error('No pending speech for ' + text);
+        window.__seen.set(request.id,reply); window.__heldSpeech.delete(request.id);
+        window.postMessage({type: 'streamlit:render',args: {reply: {replies: [...window.__seen.values()]}},disabled: false},window.location.origin);
+      };
       window.Audio = class extends EventTarget {
         constructor() {super(); this.currentTime = 0; this.volume = 1; this.src = ''; window.__audio.push(this);}
         play() {return Promise.resolve();}
@@ -33,7 +42,7 @@ const test = base.extend({
       window.addEventListener('message', event => {
         if (event.data?.type !== 'streamlit:setComponentValue') return;
         const command = event.data.value;
-        for (const id of command?.ack || []) window.__seen.delete(id);
+        for (const id of command?.ack || []) {window.__seen.delete(id);window.__heldSpeech.delete(id);}
         for (const request of command?.requests || []) {
           if (window.__seen.has(request.id)) continue;
           let result;
@@ -42,7 +51,11 @@ const test = base.extend({
             window.__speech.push(request);
             result = {audio: btoa('synthetic audio boundary'), boundaries: [{text: request.text, offset: 0, duration: 10_000_000}]};
           }
-          window.__seen.set(request.id, {id: request.id, status: 'ready', result});
+          const reply = {id: request.id, status: 'ready', result};
+          if (window.__holdSpeech && request.action === 'speech') {
+            window.__heldSpeech.set(request.id,reply);
+            window.__seen.set(request.id,{id: request.id,status: 'preparing',bytes: 0});
+          } else window.__seen.set(request.id,reply);
         }
         if (window.__seen.size) queueMicrotask(() => window.postMessage({type: 'streamlit:render',
           args: {reply: {replies: [...window.__seen.values()]}}, disabled: false}, window.location.origin));
@@ -85,10 +98,10 @@ test('search, citation projection, prefetch, themes and persisted cache work tog
   await page.getByRole('checkbox', {name: 'Read citations'}).uncheck();
   await page.getByRole('button', {name: 'Play', exact: true}).click();
   await expect(page.locator('.status')).toContainText('Reading');
-  await expect.poll(() => page.evaluate(() => window.__speech.length)).toBe(3);
+  await expect.poll(() => page.evaluate(() => window.__speech.length)).toBe(5);
   expect(await page.evaluate(() => window.__speech[0].text)).toBe('Evidence supports this.');
   await page.getByRole('button', {name: 'Pause', exact: true}).click();
-  await page.getByRole('button', {name: 'Search book (Ctrl+F)'}).click();
+  await page.getByRole('button', {name: 'Search book (Ctrl+F)'}).first().click();
   await page.getByRole('textbox', {name: 'Search book', exact: true}).fill('search destination');
   await page.locator('.search-result button').click();
   await expect(page.getByRole('combobox', {name: 'Section', exact: true})).toHaveValue('1');
@@ -119,4 +132,125 @@ test('malformed and oversized archives are rejected', async ({page}) => {
     return messages;
   });
   expect(errors).toEqual(['This file is not a readable EPUB archive.', 'Please choose an EPUB smaller than 50 MB.']);
+});
+
+
+test('continuous playback maintains five upcoming sentences and reuses previous audio on backward seeks', async ({page}) => {
+  await page.goto('/');
+  await page.evaluate(() => {window.__holdSpeech = true;});
+  const sentences = Array.from({length: 12},(_,index) => `An invented sentence number ${index + 1}.`);
+  await page.locator('input[type=file]').setInputFiles({name: 'buffer.epub',mimeType: 'application/epub+zip',buffer: makeBook(sentences.map(text => `<p>${text}</p>`).join(''))});
+  await expect(page.frameLocator('iframe[title="EPUB text"]').locator('#section-1')).toBeVisible();
+  await page.getByRole('button', {name: 'Play',exact: true}).click();
+  await expect.poll(() => page.evaluate(() => window.__speech.length)).toBe(6);
+  expect(await page.evaluate(() => window.__speech.map(request => request.text))).toEqual(sentences.slice(0,6));
+  await page.evaluate(texts => {window.__resolveSpeech(texts[5]);window.__resolveSpeech(texts[0]);},sentences);
+  await expect(page.locator('.status')).toContainText('Reading');
+  await page.evaluate(() => window.__audio[0].onended());
+  await expect.poll(() => page.evaluate(() => window.__speech.length)).toBe(7);
+  await expect(page.locator('.status')).toContainText('Preparing');
+  await page.evaluate(text => window.__resolveSpeech(text),sentences[1]);
+  await expect(page.locator('.status')).toContainText('Reading');
+  for(let index = 2;index <= 6;index++) {
+    if(index !== 5) await page.evaluate(text => window.__resolveSpeech(text),sentences[index]);
+    await page.evaluate(() => window.__audio[0].onended());
+    await expect.poll(() => page.evaluate(() => window.__speech.length)).toBe(index + 6);
+    await expect(page.locator('.status')).toContainText('Reading');
+  }
+  const frame = page.frameLocator('iframe[title="EPUB text"]');
+  await frame.getByText(sentences[1],{exact: true}).click();
+  await expect(page.locator('.status')).toContainText('Reading');
+  expect(await page.evaluate(() => window.__speech.length)).toBe(12);
+  for(let index = 2;index <= 6;index++) {
+    await page.evaluate(() => window.__audio[0].onended());
+    await expect(page.locator('.status')).toContainText('Reading');
+    // The existing source audio changes on every real transition, including cached ones.
+    await expect.poll(() => frame.locator('body').evaluate(() => [...CSS.highlights.get('spoken')][0].toString())).toBe(sentences[index]);
+  }
+  const requested = await page.evaluate(() => window.__speech.map(request => request.text));
+  expect(requested).toEqual(sentences);
+  expect(new Set(requested).size).toBe(requested.length);
+});
+
+test('Kokoro toggle uses a local worker, keeps engine voices and never sends local text to the server',async({page})=>{
+  await page.addInitScript(()=>{
+    window.__gpu=[];window.__workers=[];window.__gpuHold=false;
+    window.Worker=class {
+      constructor(){window.__workers.push(this);}
+      postMessage(job){
+        window.__gpu.push(job);
+        this.onmessage({data:{id:job.id,type:'progress',progress:{message:'Downloading Kokoro test model…'}}});
+        const complete=()=>this.onmessage?.({data:{id:job.id,type:'ready',blob:new Blob(['local audio'],{type:'audio/wav'}),duration:3}});
+        if(window.__gpuHold)window.__completeGPU=complete;else queueMicrotask(complete);
+      }
+      terminate(){}
+    };
+  });
+  await page.goto('/');
+  expect(await page.evaluate(()=>window.__workers.length)).toBe(0);
+  await page.getByRole('button',{name:'Switch to Kokoro on your GPU'}).click();
+  await expect(page.getByRole('button',{name:'Kokoro GPU active — switch to online voices'})).toHaveAttribute('aria-pressed','true');
+  await expect(page.getByRole('combobox',{name:'Reading voice'})).toHaveValue('Heart · Kokoro');
+  expect(await page.evaluate(()=>window.__workers.length)).toBe(0);
+  await page.getByRole('button',{name:'Favorite voice',exact:true}).click();
+  await page.getByRole('button',{name:'Preview voice'}).click();
+  await expect(page.locator('.status')).toContainText('Voice preview');
+  expect(await page.evaluate(()=>window.__gpu[0].speed)).toBe(1);
+  expect(await page.evaluate(()=>window.__speech.length)).toBe(0);
+  await page.getByRole('button',{name:'Kokoro GPU active — switch to online voices'}).click();
+  await expect(page.locator('.status')).not.toContainText('Voice preview');
+  await expect(page.getByRole('combobox',{name:'Reading voice'})).toHaveValue('Brian · Multilingual');
+  await page.getByRole('button',{name:'Switch to Kokoro on your GPU'}).click();
+  await page.reload();
+  await expect(page.getByRole('combobox',{name:'Reading voice'})).toHaveValue('Heart · Kokoro');
+  await expect(page.getByRole('button',{name:'Favorite voice',exact:true})).toHaveAttribute('aria-pressed','true');
+  expect(await page.evaluate(()=>window.__workers.length)).toBe(0);
+  await page.getByRole('button',{name:'Preview voice'}).click();
+  await expect(page.locator('.status')).toContainText('Voice preview');
+  expect(await page.evaluate(()=>window.__gpu.length)).toBe(0);
+  await page.locator('input[type=file]').setInputFiles({name:'local.epub',mimeType:'application/epub+zip',buffer:makeBook()});
+  await expect(page.frameLocator('iframe[title="EPUB text"]').locator('#section-1')).toBeVisible();
+  await page.getByRole('checkbox',{name:'Read citations'}).uncheck();
+  await page.getByRole('button',{name:'Play',exact:true}).click();
+  await expect(page.locator('.status')).toContainText('Reading');
+  await expect.poll(()=>page.evaluate(()=>window.__gpu.length)).toBe(5);
+  expect(await page.evaluate(()=>window.__gpu[0].text)).toBe('Evidence supports this.');
+  expect(await page.evaluate(()=>window.__speech.length)).toBe(0);
+});
+
+test('switching engines during local preparation cancels playback and unsupported GPU errors stay local',async({page})=>{
+  await page.addInitScript(()=>{
+    window.__gpu=[];window.__workers=[];window.__gpuError=false;
+    window.Worker=class {
+      constructor(){window.__workers.push(this);}
+      postMessage(job){
+        window.__gpu.push(job);
+        this.onmessage({data:{id:job.id,type:'progress',progress:{message:'Downloading Kokoro test model…'}}});
+        window.__completeGPU=()=>this.onmessage({data:window.__gpuError
+          ? {id:job.id,type:'error',error:'Kokoro needs WebGPU. Switch to online voices.'}
+          : {id:job.id,type:'ready',blob:new Blob(['local audio']),duration:3}});
+      }
+      terminate(){}
+    };
+  });
+  await page.goto('/');
+  await page.getByRole('button',{name:'Switch to Kokoro on your GPU'}).click();
+  await page.getByRole('button',{name:'Dismiss message'}).click();
+  await page.getByRole('button',{name:'Preview voice'}).click();
+  await expect(page.locator('.status')).toContainText('Downloading Kokoro test model');
+  await page.getByRole('button',{name:'Kokoro GPU active — switch to online voices'}).click();
+  await page.evaluate(()=>window.__completeGPU());
+  await expect(page.locator('.status')).not.toContainText('Voice preview');
+  expect(await page.evaluate(()=>window.__speech.length)).toBe(0);
+  // A different voice cannot use the successful preview cache from the first request.
+  await page.getByRole('button',{name:'Switch to Kokoro on your GPU'}).click();
+  await page.getByRole('button',{name:'Dismiss message'}).click();
+  await page.getByRole('combobox',{name:'Reading voice'}).fill('bella');
+  await page.getByRole('listbox').getByRole('option').first().click();
+  await page.evaluate(()=>{window.__gpuError=true;});
+  await page.getByRole('button',{name:'Preview voice'}).click();
+  await expect.poll(()=>page.evaluate(()=>window.__gpu.length)).toBe(2);
+  await page.evaluate(()=>window.__completeGPU());
+  await expect(page.getByRole('alert')).toContainText('Kokoro needs WebGPU');
+  expect(await page.evaluate(()=>window.__speech.length)).toBe(0);
 });

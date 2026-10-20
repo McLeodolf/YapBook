@@ -66,16 +66,15 @@ test('memory eviction keeps persisted speech reusable without synthesis',async()
   await cache.get('0','voice',-15,load);
   assert.equal(calls,35);
 });
-test('batch bridge does not supersede requests and accepts out-of-order results',async()=>{
+test('batch bridge sends current and five ahead without superseding requests',async()=>{
   const sent=[],rpc=new SpeechRPC(value=>sent.push(value));
-  const jobs=[0,1,2,3].map(i=>rpc.request('speech',{text:String(i)}));
-  let batch=sent.at(-1);assert.equal(batch.requests.length,3);
+  const jobs=[0,1,2,3,4,5,6].map(i=>rpc.request('speech',{text:String(i)}));
+  let batch=sent.at(-1);assert.equal(batch.requests.length,6);
   const ids=batch.requests.map(r=>r.id);
   rpc.receive({replies:[{id:ids[1],status:'ready',result:'one'}]});assert.equal(await jobs[1],'one');
-  batch=sent.at(-1);assert.deepEqual(batch.requests.map(r=>r.text),['0','2','3']);
-  const fourth=batch.requests[2].id;
-  rpc.receive({replies:[{id:ids[0],status:'ready',result:'zero'},{id:ids[2],status:'ready',result:'two'},{id:fourth,status:'ready',result:'three'}]});
-  assert.deepEqual(await Promise.all(jobs),['zero','one','two','three']);assert.equal(rpc.pending.size,0);
+  batch=sent.at(-1);assert.deepEqual(batch.requests.map(r=>r.text),['0','2','3','4','5','6']);
+  rpc.receive({replies:batch.requests.map(request=>({id:request.id,status:'ready',result:request.text}))});
+  assert.deepEqual(await Promise.all(jobs),['0','one','2','3','4','5','6']);assert.equal(rpc.pending.size,0);
 });
 
 test('seek cancels unsent jobs but lets transmitted speech finish into the cache',async()=>{
@@ -89,4 +88,32 @@ test('seek cancels unsent jobs but lets transmitted speech finish into the cache
   const id=sent.at(-1).requests[0].id;
   rpc.receive({replies:[{id,status:'ready',result:'audio'}]});
   assert.equal(await running,'audio');
+});
+
+
+test('downloaded speech is playable while storage is stalled and never synthesized twice',async()=>{
+  let calls=0,finishWrite;
+  const persisted=new Promise(resolve=>finishWrite=resolve);
+  const cache=new AudioCache(async()=>null,()=>persisted);
+  const load=async()=>{calls++;return {audio:'ready'};};
+  assert.deepEqual(await cache.get('current','voice',-15,load),{audio:'ready'});
+  for(let i=0;i<35;i++)await cache.get(String(i),'voice',-15,load);
+  assert.equal(cache.entries.size,36,'pending writes must retain their audio in memory');
+  assert.deepEqual(await cache.get('current','voice',-15,load),{audio:'ready'});
+  assert.equal(calls,36);
+  finishWrite();await Promise.all([...cache.entries.values()].map(entry=>entry.persisted));
+  assert.ok(cache.entries.size<=32);
+});
+
+test('a failed background cache write warns without delaying playback or resending audio',async()=>{
+  let failWrite,calls=0;
+  const persisted=new Promise((resolve,reject)=>failWrite=reject);
+  const cache=new AudioCache(async()=>null,()=>persisted);
+  const load=async()=>{calls++;return {audio:'ready'};};
+  assert.deepEqual(await cache.get('current','voice',-15,load),{audio:'ready'});
+  failWrite(new Error('Storage unavailable'));
+  await Promise.all([...cache.entries.values()].map(entry=>entry.persisted));
+  assert.match(cache.warning,/only for this session/);
+  assert.deepEqual(await cache.get('current','voice',-15,load),{audio:'ready'});
+  assert.equal(calls,1);
 });

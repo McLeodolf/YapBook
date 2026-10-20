@@ -1,6 +1,8 @@
 import { SentenceQueue, sentenceParts } from './text.mjs';
-import { loadAudio, speechCache } from './bridge.mjs';
+import { loadAudio, speechCache, disposeLocalSpeech } from './bridge.mjs';
 import { speechProjection } from './reader-text.mjs';
+
+export const SLEEP_MINUTES = [5,10,15,20,30,45,60,90,120];
 
 export class ReaderPlayer {
   constructor(changed, position) {
@@ -19,9 +21,9 @@ export class ReaderPlayer {
       if (this.deadline && Date.now() >= this.deadline) { this.pause(); this.setSleep('off'); }
     }, 1000);
   }
-  emit() { this.changed({status:this.status,index:this.index,bytes:this.bytes,error:this.error,cue:this.cue,preview:this.preview,link:this.link?.span,sleep:this.sleep,cacheWarning:speechCache.warning}); }
+  emit() { this.changed({status:this.status,index:this.index,bytes:this.bytes,error:this.error,cue:this.cue,preview:this.preview,link:this.link?.span,sleep:this.sleep,cacheWarning:speechCache.warning,detail:this.detail}); }
   configure(settings) {
-    const changed = this.settings.voice !== settings.voice || this.settings.rate !== settings.rate || this.settings.readCitations !== settings.readCitations;
+    const changed = this.settings.engine !== settings.engine || this.settings.voice !== settings.voice || this.settings.rate !== settings.rate || this.settings.readCitations !== settings.readCitations;
     const running = ['playing','preparing'].includes(this.status) && !this.preview;
     this.settings = settings; this.audio.volume = settings.volume/100;
     if (changed) { this.projectParts(); this.stop(); if (running && this.parts.length) this.play(); }
@@ -32,8 +34,8 @@ export class ReaderPlayer {
   resetQueue() {
     this.queue?.cancel();
     this.queue = new SentenceQueue((part,signal) => loadAudio(part,this.settings.voice,this.settings.rate,signal,bytes => {
-      if (part === (this.link ? this.link.parts[this.link.index] : this.parts[this.index]) && this.status === 'preparing') { this.bytes = bytes; this.emit(); }
-    }));
+      if (part === (this.link ? this.link.parts[this.link.index] : this.parts[this.index]) && this.status === 'preparing') { this.bytes = typeof bytes==='number'?bytes:0; this.detail=typeof bytes==='object'?bytes.message:''; this.emit(); }
+    },this.settings.engine));
   }
   setDocument(index, position) {
     this.stop(); this.sourceParts = index.parts; this.projectParts();
@@ -41,11 +43,11 @@ export class ReaderPlayer {
     this.emit();
   }
   release() { this.audio.pause(); this.audio.removeAttribute('src'); this.audio.load(); if (this.url) URL.revokeObjectURL(this.url); this.url = null; this.current = null; }
-  stop() {
+  stop(preserveQueue = false) {
     this.generation++; this.previewController?.abort(); this.preview = false;
     this.link = null;
-    clearTimeout(this.transition); this.resetQueue(); this.release();
-    this.status = 'idle'; this.cue = null; this.bytes = 0; this.error = ''; this.emit();
+    clearTimeout(this.transition); if (!preserveQueue) this.resetQueue(); this.release();
+    this.status = 'idle'; this.cue = null; this.bytes = 0; this.detail=''; this.error = ''; this.emit();
   }
   pause() {
     this.generation++; clearTimeout(this.transition); this.audio.pause();
@@ -94,7 +96,11 @@ export class ReaderPlayer {
   }
   jump(index, play = true) {
     if (!this.parts.length) return;
-    this.stop(); this.index = Math.max(0,Math.min(index,this.parts.length-1)); this.save(); this.emit();
+    this.stop(true); this.index = Math.max(0,Math.min(index,this.parts.length-1));
+    const audible=this.parts.filter(part=>!part.speech || part.speech.text);
+    const target=audible.findIndex(part=>part===this.parts[this.index]);
+    if (target>=0) this.queue.retain(audible,target);
+    this.save(); this.emit();
     if (play) this.play();
   }
   readLink(text, complete, span) {
@@ -132,13 +138,13 @@ export class ReaderPlayer {
     this.emit();
     this.transition = setTimeout(() => this.play(),previous.section !== this.parts[this.index].section ? 250 : 80);
   }
-  setSleep(value) { this.sleep = value; this.deadline = ['15','30'].includes(value) ? Date.now()+Number(value)*60000 : null; this.emit(); }
+  setSleep(value) { this.sleep = value; this.deadline = SLEEP_MINUTES.includes(Number(value)) ? Date.now()+Number(value)*60000 : null; this.emit(); }
   async testVoice() {
     speechCache.retryFailed();
     this.stop(); this.preview = true; this.status = 'preparing'; this.emit();
     const token = this.generation, controller = this.previewController = new AbortController();
     try {
-      const result = await loadAudio({text:'Welcome to YapBook. Find your voice and enjoy your next chapter.'},this.settings.voice,this.settings.rate,controller.signal,bytes=>{this.bytes=bytes;this.emit();});
+      const result = await loadAudio({text:'Welcome to YapBook. Find your voice and enjoy your next chapter.'},this.settings.voice,this.settings.rate,controller.signal,bytes=>{this.bytes=typeof bytes==='number'?bytes:0;this.detail=typeof bytes==='object'?bytes.message:'';this.emit();},this.settings.engine);
       if (token !== this.generation) return;
       this.current = result; this.url = URL.createObjectURL(result.blob); this.audio.src = this.url;
       try { await this.audio.play(); this.status = 'playing'; }
@@ -146,5 +152,5 @@ export class ReaderPlayer {
       this.emit();
     } catch (error) { if (token === this.generation) this.fail(error); }
   }
-  dispose() { this.stop(); this.queue.cancel(); clearInterval(this.clock); }
+  dispose() { this.stop(); this.queue.cancel(); disposeLocalSpeech(); clearInterval(this.clock); }
 }

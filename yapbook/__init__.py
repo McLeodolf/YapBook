@@ -1,0 +1,1 @@
+"""YapBook desktop EPUB reader."""

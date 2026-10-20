@@ -10,7 +10,7 @@ REQUEST = {"id": "one", "action": "speech", "text": "An invented test sentence."
 
 
 class SpeechTests(unittest.TestCase):
-    def test_prefetch_pool_runs_three_jobs_without_superseding_or_duplicate_sends(self):
+    def test_prefetch_pool_runs_six_jobs_and_refills_without_duplicate_sends(self):
         calls, release = [], threading.Event()
         async def fake(request, progress):
             calls.append(request['id'])
@@ -18,22 +18,28 @@ class SpeechTests(unittest.TestCase):
                 await asyncio.sleep(0.01)
             return {'audio':request['id']}
         pool = SpeechPool()
-        requests = [{**REQUEST, 'id':str(i), 'text':f'Sentence {i}.'} for i in range(3)]
+        requests = [{**REQUEST, 'id':str(i), 'text':f'Sentence {i}.'} for i in range(6)]
         with patch('speech_service.synthesize', fake):
             try:
                 for _ in range(4):pool.submit({'action':'batch','requests':requests,'ack':[]})
                 deadline=time.monotonic()+3
-                while len(calls)<3 and time.monotonic()<deadline:time.sleep(0.01)
-                self.assertCountEqual(calls,['0','1','2'])
+                while len(calls)<6 and time.monotonic()<deadline:time.sleep(0.01)
+                self.assertCountEqual(calls,[str(i) for i in range(6)])
                 release.set()
                 while any(r['status']!='ready' for r in pool.snapshot()['replies']) and time.monotonic()<deadline:time.sleep(0.01)
                 self.assertTrue(all(r['status']=='ready' for r in pool.snapshot()['replies']))
                 pool.submit({'action':'batch','requests':requests[1:],'ack':['0']})
-                self.assertEqual(len(pool.snapshot()['replies']),2)
-                self.assertCountEqual(calls,['0','1','2'])
+                self.assertEqual(len(pool.snapshot()['replies']),5)
+                self.assertCountEqual(calls,[str(i) for i in range(6)])
+                refill = [*requests[1:], {**REQUEST, 'id':'6', 'text':'Sentence 6.'}]
+                for _ in range(4):pool.submit({'action':'batch','requests':refill,'ack':['0']})
+                deadline = time.monotonic() + 3
+                while len(calls)<7 and time.monotonic()<deadline:time.sleep(0.01)
+                self.assertCountEqual(calls,[str(i) for i in range(7)])
+                self.assertEqual({r['id'] for r in pool.snapshot()['replies']}, {str(i) for i in range(1,7)})
             finally:
                 release.set()
-                pool.submit({'action':'batch','requests':[],'ack':['0','1','2']})
+                pool.submit({'action':'batch','requests':[],'ack':[str(i) for i in range(7)]})
 
     def test_validation(self):
         validate_request(REQUEST)
