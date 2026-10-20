@@ -17,7 +17,8 @@ BOOK_ORIGIN = "https://epub.local/"
 
 
 def fragment_id(section, original):
-    digest = hashlib.sha1(original.encode("utf-8")).hexdigest()[:16]
+    # Stable DOM identifiers, not authentication or integrity checks.
+    digest = hashlib.sha1(original.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
     return f"reader-s{section}-{digest}"
 
 
@@ -139,12 +140,19 @@ class EpubDocument:
         return "\n".join(output)
 
     def build_page(self):
+        from reader_text import mark_citations
         styles, pages = {}, []
         lookup = {section.name: i for i, section in enumerate(self.sections)}
         for index, section in enumerate(self.sections):
             soup = BeautifulSoup(section.markup, "html.parser")
-            body = soup.body or soup
+            body = soup.body
+            if body is None:
+                body = soup.new_tag("div")
+                for child in list(soup.contents):
+                    body.append(child.extract())
+                soup.append(body)
             base = resource_url(section.name)
+            mark_citations(body)
             css_classes = []
             for style in soup.find_all(["style", "link"]):
                 if style.name == "link":
@@ -157,7 +165,7 @@ class EpubDocument:
                         continue
                 else:
                     css_base, source = base, style.get_text()
-                key = "reader-css-" + hashlib.sha1((css_base + str(source)).encode("utf-8")).hexdigest()[:12]
+                key = "reader-css-" + hashlib.sha1((css_base + str(source)).encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
                 if key not in styles:
                     styles[key] = self._css(source, "." + key, css_base)
                 css_classes.append(key)
@@ -173,6 +181,8 @@ class EpubDocument:
                     original = tag["id"]
                     tag["data-epub-id"] = original
                     tag["id"] = fragment_id(index, original)
+                elif tag.name == "a" and tag.get("name"):
+                    tag["id"] = fragment_id(index, tag["name"])
                 if tag.get("style"):
                     values = tinycss2.parse_component_value_list(tag["style"])
                     tag["style"] = tinycss2.serialize(rewrite_urls(values, base))
@@ -196,6 +206,9 @@ class EpubDocument:
                     replacement["alt"] = svg.get_text(" ", strip=True)
                     svg.replace_with(replacement)
             body.name = "div"
+            if body.get("id"):
+                anchor = soup.new_tag("a", id=body["id"])
+                body.insert(0, anchor)
             body["id"] = f"reader-chapter-{index}"
             body["class"] = [*body.get("class", []), "reader-body", *css_classes]
             pages.append(f'<div class="reader-divider" id="reader-marker-{index}">Section {index + 1}</div>{body}')
@@ -220,7 +233,8 @@ class EpubDocument:
 
 def read_document(path):
     book = epub.read_epub(str(Path(path)), options={"ignore_ncx": True})
-    assets = {item.get_name(): (item.get_content(), item.media_type) for item in book.get_items()}
+    # get_content() rebuilds XHTML and drops original body IDs, styles and classes.
+    assets = {item.get_name(): (item.content, item.media_type) for item in book.get_items()}
     sections = []
     for item_id, linear in book.spine:
         item = book.get_item_with_id(item_id)
@@ -228,7 +242,7 @@ def read_document(path):
             continue
         if isinstance(item, epub.EpubNav) or "nav" in getattr(item, "properties", []):
             continue
-        markup = item.get_content().decode("utf-8-sig")
+        markup = item.content.decode("utf-8-sig")
         soup = BeautifulSoup(markup, "html.parser")
         heading = soup.find(["h1", "h2", "h3"])
         title = heading.get_text(" ", strip=True) if heading else item.get_name()

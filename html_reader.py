@@ -1,18 +1,23 @@
 """Continuous HTML view with exact mappings to chapter-local speech offsets."""
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 import re
 import tkinter as tk
+from urllib.parse import unquote, urlsplit
 from tkinterweb import HtmlFrame
 
 
 class HtmlBookView(HtmlFrame):
-    def __init__(self, master):
+    def __init__(self, master, on_navigate=None, on_link_error=None):
+        self.on_navigate = on_navigate
+        self.on_link_error = on_link_error
         self.model = None
         self.chapter_ranges = []
         self.offsets = []
         self.chapters = []
+        self.citation_ranges = {}
         self.highlighted_text = ""
+        self.dark = False
         super().__init__(master, messages_enabled=False, threading_enabled=False,
                          javascript_enabled=False, forms_enabled=False, objects_enabled=False,
                          # The legacy compatibility filter strips emoji even on Tk 9.
@@ -20,23 +25,108 @@ class HtmlBookView(HtmlFrame):
                          request_func=self._resource, on_link_click=self._link)
         self.load_html('<html><body style="background:#fffdf8;color:#667085;font:20px Georgia;padding:36px">'
                        'Open an EPUB to read along with its original formatting.</body></html>')
+        self._theme_styles()
+
+    def _theme_styles(self):
+        self.add_css('''html.reader-dark, html.reader-dark body {
+            background: #161e24 !important; color: #d5ded9 !important;
+        }
+        html.reader-dark body * {
+            color: #d5ded9 !important; background-color: transparent !important;
+            border-color: #36463e !important;
+        }
+        html.reader-dark a { color: #9fc9b1 !important; }
+        ''', priority="user")
+        self.set_theme(self.dark)
+
+    def set_theme(self, dark):
+        self.dark = bool(dark)
+        self.document.documentElement.setAttribute("class", "reader-dark" if self.dark else "")
+        self.update_idletasks()
 
     def _resource(self, url, *args):
         if self.model is None:
             raise OSError("No EPUB loaded")
         return self.model.request_resource(url, *args)
 
-    def _link(self, url):
-        fragment = url.split("#", 1)[1] if "#" in url else ""
-        if fragment:
-            try:
-                self.document.getElementById(fragment).scrollIntoView()
-            except tk.TclError:
-                pass
+    def activate_link(self, node):
+        self._link(self.html.get_node_attribute(node, "href", ""), node)
+
+    def _link(self, url, source=None):
+        target = urlsplit(url)
+        if target.netloc and target.netloc != "epub.local":
+            return
+        if not target.fragment:
+            return
+        try:
+            element = self.document.getElementById(unquote(target.fragment))
+            position = self._node_position(element.node)
+            if self.on_navigate is not None and position is not None:
+                self.on_navigate(*position, self._node_span(source) if source else None)
+            else:
+                element.scrollIntoView()
+        except tk.TclError:
+            if self.on_link_error is not None:
+                self.on_link_error("This link target is not included in the book.")
+
+    def _node_span(self, node):
+        position = self._node_position(node)
+        if position is None:
+            return None
+        section, start = position
+        offsets = self.offsets[section]
+        end, pending = start, [node]
+        while pending:
+            current = pending.pop()
+            if not self.html.get_node_tag(current):
+                text = self.html.get_node_text(current)
+                if text.strip():
+                    raw = int(self.html.text("offset", current, 0))
+                    end = max(end, bisect_left(offsets, raw + len(text)))
+            pending.extend(reversed(self.html.get_node_children(current)))
+        return (section, start, end) if end > start else None
+
+    def _node_position(self, target):
+        """Find the first readable text at or after an anchor in its section."""
+        ancestor = target
+        while ancestor:
+            identifier = self.html.get_node_attribute(ancestor, "id", "")
+            if identifier.startswith("reader-chapter-"):
+                section = int(identifier.removeprefix("reader-chapter-"))
+                break
+            ancestor = self.html.get_node_parent(ancestor)
+        else:
+            return None
+        offsets = self.offsets[section]
+        pending, reached = [ancestor], False
+        while pending:
+            node = pending.pop()
+            reached = reached or node == target
+            if reached and not self.html.get_node_tag(node):
+                text = self.html.get_node_text(node)
+                if text.strip():
+                    start = int(self.html.text("offset", node, 0))
+                    char = bisect_left(offsets, start)
+                    if char < len(offsets) and offsets[char] < start + len(text):
+                        return section, char
+            pending.extend(reversed(self.html.get_node_children(node)))
+        return None
+
+    def clicked_link(self, event):
+        try:
+            node, _ = self.html.node("-index", event.x, event.y)
+            while node:
+                if self.html.get_node_tag(node).lower() == "a":
+                    return node if self.html.get_node_attribute(node, "href", "") else None
+                node = self.html.get_node_parent(node)
+        except (tk.TclError, TypeError, ValueError):
+            pass
+        return None
 
     def set_document(self, model):
         self.model = model
         self.load_html(model.markup, base_url="https://epub.local/")
+        self._theme_styles()
         self.update_idletasks()
         self._map_text()
         self.clear_highlight()
@@ -53,15 +143,32 @@ class HtmlBookView(HtmlFrame):
         self.offsets, self.chapter_ranges, self.chapters = [], [], []
         for index, (_, start) in enumerate(markers):
             end = markers[index + 1][0] if index + 1 < len(markers) else len(page)
-            words, offsets = [], []
+            pieces, offsets = [], []
+            previous_end = 0
             for match in re.finditer(r"\S+", page[start:end]):
-                if words:
+                if pieces:
+                    gap = page[start + previous_end:start + match.start()]
+                    pieces.append("\n" if "\n" in gap else " ")
                     offsets.append(start + match.start() - 1)
-                words.append(match.group())
+                pieces.append(match.group())
                 offsets.extend(range(start + match.start(), start + match.end()))
+                previous_end = match.end()
             self.chapter_ranges.append((start, end))
             self.offsets.append(offsets)
-            self.chapters.append((self.model.sections[index].title, " ".join(words)))
+            self.chapters.append((self.model.sections[index].title, "".join(pieces)))
+        self.citation_ranges = {}
+        for node in self.document.querySelectorAll('[data-reader-citation="true"]'):
+            span = self._node_span(node.node)
+            if span:
+                section, start, end = span
+                self.citation_ranges.setdefault(section, []).append((start, end))
+
+    def highlight_search(self, section, start, end):
+        self.html.tag("delete", "reader-search")
+        offsets = self.offsets[section]
+        self.html.tag("configure", "reader-search", "-background", "#92d9f0", "-foreground", "#111827")
+        self.html.tag("add", "reader-search", *self.html.text("index", offsets[start], offsets[end-1]+1))
+        self.scroll_to(section, start)
 
     def clear_highlight(self):
         self.html.tag("delete", "reader-spoken")

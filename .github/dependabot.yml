@@ -1,0 +1,14 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: npm
+    directory: /web/frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+# Python locks are regenerated as one reviewed resolution using uv; do not let
+# independent bots create divergent desktop/web/build/CI resolutions.

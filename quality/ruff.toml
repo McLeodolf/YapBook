@@ -1,0 +1,5 @@
+target-version = "py313"
+line-length = 110
+exclude = [".venv", ".build-venv", "web/frontend", "test-output", "build", "dist"]
+[lint]
+select = ["E9", "F63", "F7", "F82"]

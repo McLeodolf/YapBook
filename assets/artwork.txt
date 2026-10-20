@@ -1,0 +1,18 @@
+YapBook artwork
+
+The supplied app image was edited using the built-in imagegen tool to remove
+the white exterior background. The original download is kept unchanged.
+
+Final edit prompt:
+Use case: background-extraction. Edit target: the supplied YapBook app icon.
+Remove ONLY the white exterior background outside the blue rounded-square
+app tile, making the exterior and corners truly transparent (PNG alpha).
+Preserve the entire existing blue rounded-square tile, gradients, glossy
+book, cream/white book pages, speaker, orange sound waves, all details,
+colors, composition and orientation unchanged. Do not remove white inside
+the book. Do not redesign, add a shadow, add a border or text, or change the
+illustration. Clean antialiased outer silhouette without a white fringe,
+suitable for placement on dark navy #111827. Output a square transparent
+PNG. This is an exact background-removal edit, not a new logo.
+
+The Windows ICO is a multi-size format conversion of the transparent PNG.

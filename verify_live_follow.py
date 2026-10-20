@@ -9,6 +9,7 @@ import tkinter as tk
 
 from follow_reader import ReadingWindow, generate_audio
 from windows_audio import WindowsAudio
+from app_state import AppState
 
 
 text = 'Hallo Welt. Dr. Weber liest heute ein Buch. Dies ist der letzte Satz.'
@@ -41,7 +42,8 @@ print('PASS: Windows playback clock, pause/resume, sentence seek and file releas
 
 root = tk.Tk()
 root.withdraw()
-window = ReadingWindow(root)
+preferences = tempfile.TemporaryDirectory(prefix='yapbook-follow-check-')
+window = ReadingWindow(root, app_state=AppState(Path(preferences.name) / 'library.json'))
 try:
     window.chapters = [('Testkapitel', text)]
     window.chapter_box.configure(values=['Testkapitel'])
@@ -70,4 +72,5 @@ try:
     assert window.audio_temp is None and window.highlighted is None
 finally:
     window.close()
+    preferences.cleanup()
 print('PASS: reading window follows live audio, seeks on selection, pauses and stops', flush=True)
