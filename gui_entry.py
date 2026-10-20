@@ -13,6 +13,11 @@ from epub_document import EpubDocument
 from reading_positions import PositionStore
 
 
+def require_self_test(condition, message):
+    if not condition:
+        raise RuntimeError(message)
+
+
 def main():
     parser = argparse.ArgumentParser(description="YapBook · Read EPUBs aloud with synchronized sentence highlighting")
     parser.add_argument("epub", nargs="?", type=Path)
@@ -30,23 +35,23 @@ def main():
                 root.withdraw()
                 store = PositionStore(folder)
                 window = ReadingWindow(root, position_store=store, app_state=AppState(Path(folder) / "library.json"))
-                assert (window.app_logo.width(), window.app_logo.height()) == (40, 40)
-                assert root.tk.call(str(window.app_logo), "transparency", "get", 0, 0)
+                require_self_test((window.app_logo.width(), window.app_logo.height()) == (40, 40), "Incorrect app icon size")
+                require_self_test(root.tk.call(str(window.app_logo), "transparency", "get", 0, 0), "App icon lost transparency")
                 document = EpubDocument.from_plain([('One', 'First sentence.'), ('Two', 'Second sentence.'), ('Three', 'Third sentence.')])
                 window.chapters = window.reader.set_document(document)
-                assert len(window.chapters) == 3
+                require_self_test(len(window.chapters) == 3, "Missing reader sections")
                 window.book_id = "0" * 64
                 window.section = 1
                 window.chapter_box.configure(values=[title for title, _ in window.chapters])
                 window._show_chapter()
                 window._highlight((0, 16))
                 window.toggle_theme()
-                assert window.reader.dark and window.reader.highlighted_text == 'Second sentence.'
+                require_self_test(window.reader.dark and window.reader.highlighted_text == 'Second sentence.', "Theme or highlighting failed")
                 window.toggle_theme()
-                assert not window.reader.dark
+                require_self_test(not window.reader.dark, "Light theme failed")
                 root.update()
                 window.close()
-                assert store.get(window.book_id, window.chapters) == (1, 0, 16)
+                require_self_test(store.get(window.book_id, window.chapters) == (1, 0, 16), "Reading position was not saved")
             args.self_test.write_text("OK: app artwork, HTML renderer, three sections, light/dark themes, highlighting, Windows audio and saved reading positions.\n", encoding="utf-8")
         else:
             run_follow(args.epub, args.voice, args.rate, args.chapter)

@@ -1,4 +1,4 @@
-const FALLBACK = { voice: 'en-US-BrianMultilingualNeural', rate: 0, volume: 100, fontSize: 20, follow: true, theme: 'light', favorites: [] };
+const FALLBACK = { voice: 'en-US-BrianMultilingualNeural', rate: 0, volume: 100, fontSize: 20, follow: true, readCitations: true, theme: 'light', favorites: [] };
 export function readSettings() {
   let value; try { value = JSON.parse(localStorage.getItem('yapbook-settings') || '{}'); } catch { value = {}; }
   if (!value || typeof value !== 'object') value = {};
@@ -8,6 +8,7 @@ export function readSettings() {
     if (Number.isInteger(value[key]) && value[key] >= low && value[key] <= high) result[key] = value[key];
   }
   if (typeof value.follow === 'boolean') result.follow = value.follow;
+  if (typeof value.readCitations === 'boolean') result.readCitations = value.readCitations;
   if (['light','dark'].includes(value.theme)) result.theme = value.theme;
   if (Array.isArray(value.favorites)) result.favorites = value.favorites.filter(item => typeof item === 'string' && item.endsWith('Neural'));
   return result;
@@ -16,23 +17,28 @@ export function saveSettings(settings) { localStorage.setItem('yapbook-settings'
 let connection;
 async function db() {
   if (!connection) connection = new Promise((resolve, reject) => {
-    const request = indexedDB.open('YapBook', 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('books', { keyPath: 'id' });
+    const request = indexedDB.open('YapBook', 2);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains('books')) request.result.createObjectStore('books', { keyPath: 'id' });
+      if (!request.result.objectStoreNames.contains('speech')) request.result.createObjectStore('speech');
+    };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => { connection = null; reject(new Error('Browser storage is unavailable. You can still read, but books cannot be remembered.')); };
   });
   return connection;
 }
-async function transact(mode, callback) {
+async function transact(mode, callback, name = 'books') {
   const database = await db();
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction('books', mode), request = callback(transaction.objectStore('books'));
+    const transaction = database.transaction(name, mode), request = callback(transaction.objectStore(name));
     transaction.oncomplete = () => resolve(request.result);
     transaction.onerror = () => reject(new Error('Could not save in this browser. Its storage may be full.'));
     transaction.onabort = transaction.onerror;
   });
 }
 export const getBook = id => transact('readonly', store => store.get(id));
+export const getSpeech = key => transact('readonly', store => store.get(key), 'speech');
+export const putSpeech = (key, value) => transact('readwrite', store => store.put(value, key), 'speech');
 export const listBooks = async () => (await transact('readonly', store => store.getAll())).sort((a, b) => b.opened - a.opened);
 export const putBook = book => transact('readwrite', store => store.put(book));
 export const deleteBook = id => transact('readwrite', store => store.delete(id));

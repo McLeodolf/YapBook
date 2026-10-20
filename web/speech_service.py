@@ -4,6 +4,7 @@ import base64
 import html
 import re
 import threading
+import time
 
 import edge_tts
 
@@ -104,9 +105,13 @@ class SpeechSession:
     def _work(self, request, cancelled):
         request_id = request["id"]
         # Bound simultaneous external requests across all browser sessions.
-        if not _CAPACITY.acquire(timeout=1):
-            self._update(request_id, status="error", error="The voice service is busy. Please retry in a moment.")
-            return
+        deadline = time.monotonic() + 30
+        while not _CAPACITY.acquire(timeout=0.1):
+            if cancelled.is_set():
+                return
+            if time.monotonic() >= deadline:
+                self._update(request_id, status="error", error="The voice service is busy. Please retry in a moment.")
+                return
         try:
             result = asyncio.run(run_cancellable(request, cancelled, lambda count: self._update(request_id, bytes=count)))
             if not cancelled.is_set():
@@ -120,3 +125,35 @@ class SpeechSession:
             self._update(request_id, status="error", error=message)
         finally:
             _CAPACITY.release()
+
+
+class SpeechPool:
+    """Three independent jobs: current sentence and two following sentences."""
+    def __init__(self):
+        self.jobs = {}
+        self.acked = set()
+
+    def snapshot(self):
+        return {"replies": [job.snapshot() for job in self.jobs.values()], "acked": list(self.acked)}
+
+    def submit(self, command):
+        if not isinstance(command, dict) or command.get("action") != "batch":
+            return
+        requests, ack = command.get("requests"), command.get("ack")
+        if not isinstance(requests, list) or len(requests) > 3 or not isinstance(ack, list) or len(ack) > 100:
+            return
+        self.acked = {key for key in ack if isinstance(key, str) and len(key) <= 100}
+        for key in self.acked:
+            job = self.jobs.pop(key, None)
+            if job:
+                job.submit({"action": "cancel", "id": "cancel-" + key[:90]})
+        for request in requests:
+            try:
+                validate_request(request)
+            except ValueError:
+                continue
+            key = request["id"]
+            if key in self.jobs or key in self.acked or len(self.jobs) >= 3:
+                continue
+            job = self.jobs[key] = SpeechSession()
+            job.submit(request)

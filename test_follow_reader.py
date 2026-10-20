@@ -1,6 +1,7 @@
 """Offline tests: python -m unittest test_follow_reader -v."""
 
 import gc
+from concurrent.futures import wait
 from pathlib import Path
 import tempfile
 import tkinter as tk
@@ -203,6 +204,66 @@ class FakeAudio:
 
 
 class WindowTests(unittest.TestCase):
+    def test_normal_playback_prepares_both_following_sentences_while_current_is_pending(self):
+        self.use_chapters([('One','First sentence. Second sentence. Third sentence. Fourth sentence.')])
+        calls, release = [], threading.Event()
+        async def speech(text, voice, rate, cancelled, progress=None):
+            calls.append(text)
+            if text == 'First sentence.':release.wait(3)
+            return text.encode(), [SentenceCue(0,1000,0,len(text))]
+        with patch('follow_reader.generate_audio',speech):
+            try:
+                self.app.toggle_play()
+                self.wait_until(lambda:len(calls)==3 and len(self.app.audio_cache)==2)
+                self.assertEqual(self.app.state,'loading')
+                release.set()
+                self.wait_until(lambda:self.app.state=='playing')
+                self.app.player.state='stopped'
+                self.poll_once()
+                self.assertEqual(self.app.state,'playing')
+                self.assertEqual(self.app.player.play_calls[-1],b'Second sentence.')
+                self.wait_until(lambda:len(self.app.audio_cache)==2)
+                self.app.player.state='stopped'
+                self.poll_once()
+                self.assertEqual(self.app.player.play_calls[-1],b'Third sentence.')
+                self.assertCountEqual(calls,['First sentence.','Second sentence.','Third sentence.','Fourth sentence.'])
+            finally:
+                release.set();self.app.stop()
+
+    def test_citation_toggle_filters_speech_without_altering_visible_sentence(self):
+        original='The garden (Smith et al., 2021) is quiet [12]. Another sentence.'
+        self.use_chapters([('One',original)])
+        self.app.read_citations.set(False)
+        self.app._citations_changed()
+        calls=[]
+        async def speech(text, voice, rate, cancelled, progress=None):
+            calls.append(text);return text.encode(),[SentenceCue(0,1000,0,len(text))]
+        with patch('follow_reader.generate_audio',speech):
+            self.app.toggle_play()
+            self.wait_until(lambda:self.app.state=='playing' and len(self.app.audio_cache)==1)
+            self.poll_once()
+            self.assertCountEqual(calls,['The garden is quiet.','Another sentence.'])
+            self.assertEqual(self.app.reader.highlighted_text,'The garden (Smith et al., 2021) is quiet [12].')
+            self.assertEqual(self.app.chapters[0][1],original)
+            self.app.stop()
+
+    def test_search_selection_crosses_sections_without_starting_paused_audio(self):
+        self.use_chapters([('One','First sentence.'),('Two','A unique search target.')])
+        self.app.search_book()
+        self.app.search_entry.insert(0,'unique search')
+        deadline=time.monotonic()+2
+        while time.monotonic()<deadline:
+            self.root.update();time.sleep(0.01)
+            # Trigger the same debounced UI path used when typing.
+            trees=[child for frame in self.app.search_window.winfo_children() for child in frame.winfo_children()
+                   if child.winfo_class()=='Treeview']
+            if trees and trees[0].get_children():break
+        self.assertEqual(len(trees[0].get_children()),1)
+        trees[0].selection_set('0');self.root.update()
+        self.assertEqual(self.app.section,1)
+        self.assertEqual(self.app.state,'idle')
+        self.app.search_window.destroy()
+
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.root = tk.Tk()
@@ -216,6 +277,10 @@ class WindowTests(unittest.TestCase):
 
     def tearDown(self):
         self.app.close()
+        # Started requests deliberately finish into the shared cache after Stop.
+        with self.app.speech_cache.lock:
+            pending = list(self.app.speech_cache.pending.values())
+        wait(pending, timeout=5)
         self.app = self.root = None
         # Tk objects must be collected here, not in a later audio worker thread.
         gc.collect()
@@ -350,8 +415,9 @@ class WindowTests(unittest.TestCase):
         with patch('follow_reader.generate_audio', speech):
             try:
                 self.app.toggle_play()
-                self.wait_until(lambda: len(self.app.audio_cache) == 2)
-                self.assertEqual([call[0] for call in calls], [text for _, text in chapters[:3]])
+                # Prefetch can finish before the current sentence's UI event.
+                self.wait_until(lambda: len(self.app.audio_cache) == 2 and len(self.app.player.play_calls) == 1)
+                self.assertCountEqual([call[0] for call in calls], [text for _, text in chapters[:3]])
                 self.assertTrue(all(call[2] == 0 for call in calls))
                 self.assertEqual(len(self.app.player.play_calls), 1)
                 self.assertTrue(self.app.speed_slider.instate(['disabled']))
@@ -381,7 +447,7 @@ class WindowTests(unittest.TestCase):
             try:
                 self.app.toggle_play()
                 self.wait_until(lambda: len(self.app.audio_cache) == 2)
-                self.assertEqual(len(calls), 3)
+                self.assertEqual(len(calls), 1, 'Identical sentences at different offsets reuse one synthesis')
                 second_start, second_text = self.app.parts[1]
                 self.app.player.state = 'stopped'
                 self.poll_once()
@@ -413,7 +479,7 @@ class WindowTests(unittest.TestCase):
                 self.wait_until(lambda: (2, 0) in self.app.audio_cache)
                 self.assertEqual(self.app.state, 'paused')
                 self.assertEqual(len(self.app.player.play_calls), 1)
-                self.assertEqual(calls, ['First sentence.', 'Second sentence.'])
+                self.assertCountEqual(calls, ['First sentence.', 'Second sentence.'])
                 self.app.toggle_play()
                 self.app.player.state = 'stopped'
                 self.poll_once()
@@ -428,7 +494,7 @@ class WindowTests(unittest.TestCase):
                 release.set()
                 self.app.stop()
 
-    def test_stop_cancels_pending_prefetch_and_discards_late_result(self):
+    def test_stop_detaches_playback_but_keeps_completed_prefetch_for_restart(self):
         self.use_chapters([(str(i), f'Sentence {i}.') for i in range(4)])
         release, finished = threading.Event(), threading.Event()
         calls = []
@@ -443,7 +509,7 @@ class WindowTests(unittest.TestCase):
         with patch('follow_reader.generate_audio', speech):
             try:
                 self.app.toggle_play()
-                self.wait_until(lambda: self.app.state == 'playing' and len(calls) == 2)
+                self.wait_until(lambda: self.app.state == 'playing' and len(calls) == 3)
                 cancelled = self.app.cancelled
                 self.app.stop()
                 release.set()
@@ -454,7 +520,10 @@ class WindowTests(unittest.TestCase):
                 self.assertFalse(self.app.audio_cache)
                 self.assertIsNone(self.app.audio_jobs)
                 self.assertEqual(len(self.app.player.play_calls), 1)
-                self.assertEqual(calls, ['Sentence 0.', 'Sentence 1.'])
+                self.assertCountEqual(calls, ['Sentence 0.', 'Sentence 1.', 'Sentence 2.'])
+                self.app.toggle_play()
+                self.wait_until(lambda: self.app.state == 'playing' and len(self.app.audio_cache) == 2)
+                self.assertEqual(len(calls), 3, 'Restart joins/reuses all three original requests')
             finally:
                 release.set()
                 self.app.stop()
@@ -469,7 +538,7 @@ class WindowTests(unittest.TestCase):
         with patch('follow_reader.generate_audio', speech), patch('follow_reader.messagebox.showerror') as error:
             try:
                 self.app.toggle_play()
-                self.wait_until(lambda: (1, 0) in self.app.audio_cache)
+                self.wait_until(lambda: (1, 0) in self.app.audio_cache and self.app.state == 'playing')
                 self.assertEqual(self.app.state, 'playing')
                 error.assert_not_called()
                 self.app.player.state = 'stopped'

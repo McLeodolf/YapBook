@@ -4,12 +4,37 @@ import time
 import unittest
 from unittest.mock import patch
 
-from speech_service import SpeechSession, run_cancellable, validate_request
+from speech_service import SpeechSession, SpeechPool, run_cancellable, validate_request
 
 REQUEST = {"id": "one", "action": "speech", "text": "An invented test sentence.", "voice": "en-US-BrianMultilingualNeural", "rate": -15}
 
 
 class SpeechTests(unittest.TestCase):
+    def test_prefetch_pool_runs_three_jobs_without_superseding_or_duplicate_sends(self):
+        calls, release = [], threading.Event()
+        async def fake(request, progress):
+            calls.append(request['id'])
+            while not release.is_set():
+                await asyncio.sleep(0.01)
+            return {'audio':request['id']}
+        pool = SpeechPool()
+        requests = [{**REQUEST, 'id':str(i), 'text':f'Sentence {i}.'} for i in range(3)]
+        with patch('speech_service.synthesize', fake):
+            try:
+                for _ in range(4):pool.submit({'action':'batch','requests':requests,'ack':[]})
+                deadline=time.monotonic()+3
+                while len(calls)<3 and time.monotonic()<deadline:time.sleep(0.01)
+                self.assertCountEqual(calls,['0','1','2'])
+                release.set()
+                while any(r['status']!='ready' for r in pool.snapshot()['replies']) and time.monotonic()<deadline:time.sleep(0.01)
+                self.assertTrue(all(r['status']=='ready' for r in pool.snapshot()['replies']))
+                pool.submit({'action':'batch','requests':requests[1:],'ack':['0']})
+                self.assertEqual(len(pool.snapshot()['replies']),2)
+                self.assertCountEqual(calls,['0','1','2'])
+            finally:
+                release.set()
+                pool.submit({'action':'batch','requests':[],'ack':['0','1','2']})
+
     def test_validation(self):
         validate_request(REQUEST)
         for changed in ({"text": "x"*1101}, {"voice": "invalid"}, {"rate": True}, {"rate": 999}, {"action": "unknown"}):

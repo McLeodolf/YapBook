@@ -19,3 +19,10 @@ backup-*/
 *.epub
 *.mp3
 *.wav
+web/frontend/test-output/
+web/frontend/tests/reader-features-*.png
+test-output/
+.coverage*
+.mypy_cache/
+.ruff_cache/
+quality/bin/

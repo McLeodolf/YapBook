@@ -12,7 +12,7 @@ const book = Buffer.from(zipSync(Object.fromEntries(Object.entries(archive).map(
 const browser = await chromium.launch({channel:'chrome',headless:true,args:['--mute-audio']});
 const page = await browser.newPage({viewport:{width:1100,height:850}});
 const errors=[]; page.on('pageerror',error=>{errors.push(error.message);console.log('Browser error:',error.message);});
-await page.addInitScript(()=>{window.__speech=[];window.addEventListener('message',event=>{if(event.data?.type==='streamlit:setComponentValue'&&event.data.value?.action==='speech')window.__speech.push(event.data.value.text);});});
+await page.addInitScript(()=>{window.__speech=[];const seen=new Set();window.addEventListener('message',event=>{if(event.data?.type==='streamlit:setComponentValue')for(const command of event.data.value?.requests||[]){if(command.action==='speech'&&!seen.has(command.id)){seen.add(command.id);window.__speech.push(command.text);}}});});
 try {
   await page.goto(process.env.YAPBOOK_TEST_URL || 'http://127.0.0.1:8501/');
   const app = page.frameLocator('iframe[title="streamlit_app.yapbook_reader"]');
@@ -46,7 +46,8 @@ try {
   await checkTarget('Here is the note.');
   assert.equal(await app.getByRole('combobox',{name:'Section',exact:true}).inputValue(),'1');
   const firstRequests=await page.evaluate(()=>window.__speech);
-  assert.deepEqual(firstRequests.slice(0,2),['Read the note','Here is the note.'],'Read the label once before preparing its destination.');
+  assert.equal(firstRequests[0],'Read the note','Read the label before preparing its destination.');
+  assert.ok(firstRequests.slice(1).includes('Here is the note.'));
   assert.equal(firstRequests.filter(text=>text==='Read the note').length,1);
   await reader.getByRole('link',{name:'Return to the beginning'}).click();
   await checkTarget('Original sentence.');

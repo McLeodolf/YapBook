@@ -16,6 +16,12 @@ READ A BOOK
 
 YAPBOOK / FOLLOW-ALONG WINDOW
 
+    Search the open EPUB with Ctrl+F or the magnifying-glass icon.
+    "Read citations" controls whether author-year references, [12]-style
+    citations and marked footnotes are spoken. Visible text stays unchanged.
+    The current sentence and next two prepare concurrently. Successful audio
+    is saved locally and reused for the same spoken text, voice and speed.
+
     Double-click YapBook.exe, then choose "Open book …" and "Start reading".
     The EXE needs no Python installation. YapBook.cmd starts the Python version.
     You can also drag an EPUB file onto the EXE or YapBook.cmd.

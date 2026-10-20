@@ -1,3 +1,4 @@
+import { citationSpans } from './reader-text.mjs';
 export const DEFAULT_VOICE = 'en-US-BrianMultilingualNeural';
 const titles = new Set('dr. prof. mr. mrs. ms. st. rev. capt. cmdr. lt. gen. col. sgt. adm. sen. rep.'.split(' '));
 const abbreviations = new Set('bzw. z.b. u.a. d.h. e.g. i.e. ca. vgl.'.split(' '));
@@ -8,6 +9,7 @@ function periodContinues(text, end) {
   // Only nearby words matter; avoid rescanning a whole chapter at every dot.
   const before=text.slice(Math.max(0,end-128),end), after=text.slice(end,end+128);
   if (!before.endsWith('.') || before.endsWith('..')) return false;
+  if (/\bet\s+al\.$/i.test(before)) return /^[^\S\r\n]*[,;(]?[^\S\r\n]*(?:18|19|20)\d{2}\b/u.test(after) || /^[^\S\r\n]+\p{Ll}/u.test(after);
   const following=after.match(/^[^\S\r\n]+([\p{L}\p{N}]+)/u), token=before.match(/([\p{L}\p{N}]+(?:\.[\p{L}\p{N}]+)*\.)$/u);
   if (!following || !token) return false;
   const word=token[1], next=following[1], lower=word.toLowerCase(), nextLower=next.toLowerCase();
@@ -27,6 +29,7 @@ function periodContinues(text, end) {
 
 export function sentenceSpans(text, locale = 'en') {
   const result = [];
+  const protectedRanges = citationSpans(text);
   const segmenter = new Intl.Segmenter(locale, { granularity: 'sentence' });
   for (const line of text.matchAll(/[^\n]+/g)) {
     let pending = null;
@@ -36,7 +39,7 @@ export function sentenceSpans(text, locale = 'en') {
       if (!value) continue;
       const start=line.index+segment.index+leading, end=start+value.length;
       pending ??= start;
-      if (periodContinues(text,end)) continue;
+      if (periodContinues(text,end) || protectedRanges.some(([a,b])=>a<end && end<b)) continue;
       result.push([pending,end]); pending=null;
     }
     if (pending !== null) result.push([pending,line.index+line[0].trimEnd().length]);
@@ -99,21 +102,24 @@ export function alignBoundaries(text, events) {
 }
 
 export class SentenceQueue {
-  constructor(load, count = 3) { this.load = load; this.count = count; this.entries = new Map(); this.controller = new AbortController(); }
+  constructor(load, count = 3) { this.load = load; this.count = count; this.entries = new Map(); this.ready = new Map(); this.controller = new AbortController(); }
   prepare(parts, index) {
     const wanted = new Set(parts.slice(index, index + this.count).map(part => part.key));
     for (const key of this.entries.keys()) if (!wanted.has(key)) this.entries.delete(key);
-    let chain = this.tail || Promise.resolve();
+    for (const key of this.ready.keys()) if (!wanted.has(key)) this.ready.delete(key);
     for (const part of parts.slice(index, index + this.count)) if (!this.entries.has(part.key)) {
-      const promise = chain.catch(() => {}).then(() => {
+      const promise = Promise.resolve().then(() => {
         this.controller.signal.throwIfAborted();
         return this.load(part, this.controller.signal);
+      }).then(result => {
+        if (!this.controller.signal.aborted && this.entries.has(part.key)) this.ready.set(part.key,result);
+        return result;
       });
       promise.catch(() => {});
-      this.entries.set(part.key, promise); chain = promise;
+      this.entries.set(part.key, promise);
     }
-    this.tail = chain;
+    this.tail = Promise.allSettled(this.entries.values());
     return this.entries.get(parts[index]?.key);
   }
-  cancel() { this.controller.abort(); this.entries.clear(); }
+  cancel() { this.controller.abort(); this.entries.clear(); this.ready.clear(); }
 }

@@ -1,10 +1,11 @@
 import React, {useEffect,useMemo,useRef,useState} from 'react';
 import {createRoot} from 'react-dom/client';
-import {BookOpen,FolderOpen,Library,Play,Pause,Square,SkipBack,SkipForward,Volume2,Gauge,Star,Headphones,RefreshCw,Bookmark,AlignCenter,Minus,Plus,Moon,Sun,X,Trash2,ChevronDown,Check,LoaderCircle,ArrowRight} from 'lucide-react';
+import {BookOpen,FolderOpen,Library,Play,Pause,Square,SkipBack,SkipForward,Volume2,Gauge,Star,Headphones,RefreshCw,Bookmark,AlignCenter,Minus,Plus,Moon,Sun,X,Trash2,ChevronDown,Check,LoaderCircle,ArrowRight,Search} from 'lucide-react';
 import {openEpub,indexDocument,textRange,clickedPart,followBookLink} from './lib/epub.mjs';
 import {readSettings,saveSettings,listBooks,getBook,putBook,updateBook,deleteBook} from './lib/storage.mjs';
 import {request,resizeFrame} from './lib/bridge.mjs';
 import {ReaderPlayer} from './lib/player.mjs';
+import {searchBook} from './lib/reader-text.mjs';
 import './style.css';
 import './dark.css';
 
@@ -23,6 +24,16 @@ function App() {
   const [loadingVoices,setLoadingVoices] = useState(false), [opening,setOpening] = useState(false), [notice,setNotice] = useState('');
   const [elapsed,setElapsed] = useState(0), [markName,setMarkName] = useState('');
   const [viewportRevision,setViewportRevision] = useState(0);
+  const [searchText,setSearchText] = useState(''), [searchTerm,setSearchTerm] = useState(''), [searchPage,setSearchPage] = useState(0);
+  const searchInput = useRef();
+  const searchHits = useMemo(()=>searchBook(indexed?.sections || [],searchTerm),[indexed,searchTerm]);
+  useEffect(()=>{const timer=setTimeout(()=>{setSearchTerm(searchText);setSearchPage(0);},180);return()=>clearTimeout(timer);},[searchText]);
+  useEffect(()=>{if(panel==='search')searchInput.current?.focus();},[panel]);
+  useEffect(()=>{highlightKey.current='';setViewportRevision(v=>v+1);},[panel,settings.fontSize]);
+  useEffect(()=>{
+    const key=event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='f'&&bookRef.current){event.preventDefault();setPanel('search');searchInput.current?.focus();}};
+    window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);
+  },[]);
   const file = useRef(), frame = useRef(), restored = useRef(), openGeneration = useRef(0), highlightKey = useRef('');
   const engine = useRef();
   if (!engine.current) engine.current = new ReaderPlayer(setPlayback,position => {
@@ -33,6 +44,7 @@ function App() {
   const playing = ['playing','preparing'].includes(playback.status);
   const change = patch => setSettings(current=>({...current,...patch}));
   const refreshLibrary = () => listBooks().then(setRecent).catch(error=>setNotice(error.message));
+  useEffect(()=>{if(playback.cacheWarning)setNotice(playback.cacheWarning);},[playback.cacheWarning]);
 
   async function fetchVoices() {
     setLoadingVoices(true);
@@ -57,12 +69,12 @@ function App() {
     const range=textRange(doc,indexed.sections[shown.section],start,end); if(!range)return;
     if(doc.defaultView.CSS.highlights) doc.defaultView.CSS.highlights.set('spoken',new doc.defaultView.Highlight(range));
     else {const selection=doc.getSelection();selection.removeAllRanges();selection.addRange(range);}
-    if(key!==highlightKey.current&&settings.follow){const rect=range.getBoundingClientRect();if(rect.top<70||rect.bottom>doc.defaultView.innerHeight-70)doc.defaultView.scrollBy({top:rect.top-doc.defaultView.innerHeight*0.32,behavior:'smooth'});}
+    if(key!==highlightKey.current&&settings.follow){const rect=range.getBoundingClientRect();if(rect.top<70||rect.bottom>doc.defaultView.innerHeight-70)doc.defaultView.scrollBy({top:rect.top-doc.defaultView.innerHeight*0.32,behavior:playing?'smooth':'auto'});}
     highlightKey.current=key;
   },[indexed,part,playback.cue,playback.preview,playback.link,settings.follow,viewportRevision]);
 
   async function openFile(blob) {
-    const token=++openGeneration.current;player.stop();setOpening(true);setNotice('');setPanel('');
+    const token=++openGeneration.current;player.stop();setOpening(true);setNotice('');setPanel('');setSearchText('');
     try {
       const parsed=await openEpub(blob);
       if(token!==openGeneration.current){parsed.dispose();return;}
@@ -82,8 +94,21 @@ function App() {
         if (followBookLink(event,index,(text,complete,span)=>player.readLink(text,complete,span),i=>player.jump(i),setNotice)) return;
         const i=clickedPart(event,index);if(i!==null&&i>=0)player.jump(i);
       });
-      doc.addEventListener('keydown',event=>{if(event.code==='Space'){event.preventDefault();['playing','preparing'].includes(player.status)?player.pause():player.play();}});
+      doc.addEventListener('keydown',event=>{if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='f'){event.preventDefault();setPanel('search');searchInput.current?.focus();return;}if(event.code==='Space'){event.preventDefault();['playing','preparing'].includes(player.status)?player.pause():player.play();}});
     }catch(error){setNotice(error.message);}
+  }
+  function openSearchResult(hit) {
+    const target=indexed.parts.findIndex(p=>p.section===hit.section&&p.end>hit.start);
+    if(target<0)return;
+    player.jump(target,playing);
+    requestAnimationFrame(()=>{
+      const doc=frame.current?.contentDocument;
+      if(!doc)return;
+      const range=textRange(doc,indexed.sections[hit.section],hit.start,hit.end);
+      if(!range)return;
+      if(doc.defaultView.CSS.highlights)doc.defaultView.CSS.highlights.set('search',new doc.defaultView.Highlight(range));
+      const rect=range.getBoundingClientRect();doc.defaultView.scrollBy({top:rect.top-doc.defaultView.innerHeight*0.3});
+    });
   }
   function bookmark() {
     if(!part)return;
@@ -108,13 +133,18 @@ function App() {
       </div>
       <div className="transport-row"><div className="transport"><IconButton label="Previous sentence" icon={SkipBack} disabled={!part} onClick={()=>player.jump(playback.index-1)}/><button className="play-button" aria-label={playing?'Pause':'Play'} title={playing?'Pause':'Play'} disabled={!part&&!playback.preview} onClick={()=>playing?player.pause():player.play()}>{playing?<Pause size={22} fill="currentColor"/>:<Play size={22} fill="currentColor"/>}</button><IconButton label="Stop" icon={Square} disabled={!part&&!playback.preview} onClick={()=>player.stop()}/><IconButton label="Next sentence" icon={SkipForward} disabled={!part} onClick={()=>player.jump(playback.index+1)}/></div>
         <div className="sliders"><label><span><Gauge size={14}/>Speed <b>{settings.rate>0?'+':''}{settings.rate}%</b></span><input aria-label="Speed" type="range" min="-50" max="100" step="5" value={settings.rate} onChange={event=>change({rate:Number(event.target.value)})}/></label><label><span><Volume2 size={14}/>Volume <b>{settings.volume}%</b></span><input aria-label="Volume" type="range" min="0" max="100" value={settings.volume} onChange={event=>change({volume:Number(event.target.value)})}/></label></div>
-        <div className="reader-actions"><IconButton label="Follow current sentence" icon={AlignCenter} active={settings.follow} onClick={()=>change({follow:!settings.follow})}/><IconButton label="Smaller text" icon={Minus} disabled={settings.fontSize<=14} onClick={()=>change({fontSize:settings.fontSize-1})}/><span className="font-size">Aa</span><IconButton label="Larger text" icon={Plus} disabled={settings.fontSize>=36} onClick={()=>change({fontSize:settings.fontSize+1})}/><IconButton label="Bookmarks" icon={Bookmark} disabled={!book} active={panel==='marks'} onClick={()=>setPanel(panel==='marks'?'':'marks')}/><label className="sleep" title="Sleep timer"><Moon size={17}/><select aria-label="Sleep timer" value={playback.sleep||'off'} onChange={event=>player.setSleep(event.target.value)}><option value="off">Off</option><option value="15">15 min</option><option value="30">30 min</option><option value="section">End of section</option></select></label></div>
+        <div className="reader-actions"><label className="citation-option" title="Read author–year references, numbered citations and footnote markers aloud"><input type="checkbox" checked={settings.readCitations} onChange={event=>change({readCitations:event.target.checked})}/>Read citations</label><IconButton label="Follow current sentence" icon={AlignCenter} active={settings.follow} onClick={()=>change({follow:!settings.follow})}/><IconButton label="Smaller text" icon={Minus} disabled={settings.fontSize<=14} onClick={()=>change({fontSize:settings.fontSize-1})}/><span className="font-size">Aa</span><IconButton label="Larger text" icon={Plus} disabled={settings.fontSize>=36} onClick={()=>change({fontSize:settings.fontSize+1})}/><IconButton label="Search book (Ctrl+F)" icon={Search} disabled={!book} active={panel==='search'} onClick={()=>setPanel(panel==='search'?'':'search')}/><IconButton label="Bookmarks" icon={Bookmark} disabled={!book} active={panel==='marks'} onClick={()=>setPanel(panel==='marks'?'':'marks')}/><label className="sleep" title="Sleep timer"><Moon size={17}/><select aria-label="Sleep timer" value={playback.sleep||'off'} onChange={event=>player.setSleep(event.target.value)}><option value="off">Off</option><option value="15">15 min</option><option value="30">30 min</option><option value="section">End of section</option></select></label></div>
       </div>
     </section>
     {(notice||playback.error)&&<div className="notice" role="alert"><span>{notice||playback.error}</span><button aria-label="Dismiss message" onClick={()=>{setNotice('');player.error='';player.emit();}}><X size={16}/></button></div>}
     <div className="workspace">
-      {panel&&<aside className="side-panel"><div className="panel-heading"><h2>{panel==='library'?'Your library':'Bookmarks'}</h2><IconButton label="Close panel" icon={X} onClick={()=>setPanel('')}/></div>
-        {panel==='library'?<><p className="hint">Saved on this browser.</p>{recent.map(item=><div className="library-item" key={item.id}><button onClick={()=>openFile(item.blob)}><BookOpen size={17}/><span>{item.title}<small>{new Date(item.opened).toLocaleDateString()}</small></span></button><IconButton label={'Remove '+item.title} icon={Trash2} onClick={()=>deleteBook(item.id).then(refreshLibrary).catch(error=>setNotice(error.message))}/></div>)}{!recent.length&&<p className="hint">Open an EPUB to start your library.</p>}</>:<><div className="add-mark"><input aria-label="Bookmark name" placeholder="Name this bookmark" value={markName} onChange={event=>setMarkName(event.target.value)} onKeyDown={event=>{if(event.key==='Enter')bookmark();}}/><IconButton label="Save bookmark" icon={Plus} disabled={!part} onClick={bookmark}/></div>{marks.map(mark=><div className="library-item" key={mark.id}><button onClick={()=>{const i=indexed.parts.findIndex(p=>p.section===mark.section&&p.end>mark.start);if(i>=0)player.jump(i);}}><Bookmark size={16}/><span>{mark.name}<small>{book.sections[mark.section]?.title}</small></span></button><IconButton label={'Delete bookmark '+mark.name} icon={Trash2} onClick={()=>removeMark(mark.id)}/></div>)}{!marks.length&&<p className="hint">Save a sentence to return to it later.</p>}</>}
+      {panel&&<aside className="side-panel"><div className="panel-heading"><h2>{panel==='library'?'Your library':panel==='search'?'Search book':'Bookmarks'}</h2><IconButton label="Close panel" icon={X} onClick={()=>setPanel('')}/></div>
+        {panel==='search'?<>
+          <input ref={searchInput} className="book-search" aria-label="Search book" placeholder="Search this EPUB…" value={searchText} onChange={event=>setSearchText(event.target.value)} onKeyDown={event=>{if(event.key==='Escape')setPanel('');}}/>
+          <p className="hint" role="status">{searchTerm?`${searchHits.length} matches in this book`:'Search all sections. Select a result to go there.'}</p>
+          {searchHits.slice(searchPage*50,(searchPage+1)*50).map(hit=><div className="library-item search-result" key={`${hit.section}:${hit.start}`}><button onClick={()=>openSearchResult(hit)}><span><small>{book.sections[hit.section].title}</small>{indexed.sections[hit.section].text.slice(Math.max(0,hit.start-35),hit.start)}<mark>{indexed.sections[hit.section].text.slice(hit.start,hit.end)}</mark>{indexed.sections[hit.section].text.slice(hit.end,hit.end+80)}</span></button></div>)}
+          {searchHits.length>50&&<div className="search-pages"><button disabled={!searchPage} onClick={()=>setSearchPage(p=>p-1)}>Previous</button><span>{searchPage+1} / {Math.ceil(searchHits.length/50)}</span><button disabled={(searchPage+1)*50>=searchHits.length} onClick={()=>setSearchPage(p=>p+1)}>Next</button></div>}
+        </>:panel==='library'?<><p className="hint">Saved on this browser.</p>{recent.map(item=><div className="library-item" key={item.id}><button onClick={()=>openFile(item.blob)}><BookOpen size={17}/><span>{item.title}<small>{new Date(item.opened).toLocaleDateString()}</small></span></button><IconButton label={'Remove '+item.title} icon={Trash2} onClick={()=>deleteBook(item.id).then(refreshLibrary).catch(error=>setNotice(error.message))}/></div>)}{!recent.length&&<p className="hint">Open an EPUB to start your library.</p>}</>:<><div className="add-mark"><input aria-label="Bookmark name" placeholder="Name this bookmark" value={markName} onChange={event=>setMarkName(event.target.value)} onKeyDown={event=>{if(event.key==='Enter')bookmark();}}/><IconButton label="Save bookmark" icon={Plus} disabled={!part} onClick={bookmark}/></div>{marks.map(mark=><div className="library-item" key={mark.id}><button onClick={()=>{const i=indexed.parts.findIndex(p=>p.section===mark.section&&p.end>mark.start);if(i>=0)player.jump(i);}}><Bookmark size={16}/><span>{mark.name}<small>{book.sections[mark.section]?.title}</small></span></button><IconButton label={'Delete bookmark '+mark.name} icon={Trash2} onClick={()=>removeMark(mark.id)}/></div>)}{!marks.length&&<p className="hint">Save a sentence to return to it later.</p>}</>}
       </aside>}
       <section className="reader-area" aria-label="Book reader">
         {book&&<div className="book-bar"><div><BookOpen size={16}/><span title={book.title}>{book.title}</span></div><select aria-label="Section" value={part?.section??0} onChange={event=>{const i=indexed?.parts.findIndex(p=>p.section===Number(event.target.value));if(i>=0)player.jump(i,playing);}}>{book.sections.map((s,i)=><option key={i} value={i}>{s.title}</option>)}</select></div>}

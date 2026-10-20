@@ -49,7 +49,7 @@ def main():
             window.toggle_play()
             wait_until(root, lambda: len(window.audio_cache) == 2)
             assert window.state == "paused"
-            assert requests == [text for _, text in chapters]
+            assert sorted(requests) == sorted(text for _, text in chapters)
             print("PASS: exactly two upcoming sentences prepared during paused playback", flush=True)
             window.toggle_play()
 

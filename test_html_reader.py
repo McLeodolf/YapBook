@@ -35,6 +35,20 @@ def sample_book():
 
 
 class HtmlReaderTests(unittest.TestCase):
+    def test_citation_markup_and_search_keep_original_offsets(self):
+        document = EpubDocument([BookSection('Refs','refs.xhtml',
+            '<html><body><p>A claim<sup><a epub:type="noteref" href="#note">12</a></sup> remains visible. x<sup>2</sup>.</p>'
+            '<p id="note">A note.</p></body></html>')], {})
+        document.build_page()
+        chapters = self.view.set_document(document)
+        text = chapters[0][1]
+        spans = self.view.citation_ranges[0]
+        self.assertTrue(spans)
+        self.assertTrue(all(text[a:b] == '12' for a,b in spans))
+        start = text.index('remains')
+        self.view.highlight_search(0, start, start+len('remains visible'))
+        self.assertIn('x2', text)
+
     def setUp(self):
         self.root = tk.Tk()
         self.root.withdraw()

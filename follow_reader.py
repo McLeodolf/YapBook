@@ -3,6 +3,7 @@
 import asyncio
 from dataclasses import dataclass
 from itertools import islice
+import logging
 from pathlib import Path
 import queue
 import re
@@ -17,6 +18,8 @@ import edge_tts
 
 from app_branding import apply_app_icon, load_app_logo
 from app_state import AppState, DEFAULT_VOICE, service_rate, valid_voice
+from audio_cache import AudioCache
+from reader_text import citation_spans, speech_projection, search_book
 from read_epub import prepare_speech, speech_chunks
 from epub_document import EpubDocument, read_document
 from html_reader import HtmlBookView
@@ -101,6 +104,11 @@ def period_continues(text, end):
     before, after = text[max(0, end - 128):end], text[end:end + 128]
     if not before.endswith(".") or before.endswith(".."):
         return False
+    if re.search(r"\bet\s+al\.$", before, re.I):
+        if re.match(r"[^\S\r\n]*[,;(]?[^\S\r\n]*(?:18|19|20)\d{2}\b", after):
+            return True
+        next_token = re.match(r"[^\S\r\n]+([^\W_]+)", after)
+        return bool(next_token and next_token[1][0].islower())
     following = re.match(r"[^\S\r\n]+([^\W_]+)", after)
     token = re.search(r"([^\W_]+(?:\.[^\W_]+)*\.)$", before)
     if following is None or token is None:
@@ -133,12 +141,14 @@ def period_continues(text, end):
 def sentence_spans(text):
     """Find logical sentences, preserving heading and paragraph boundaries."""
     start = 0
+    protected = citation_spans(text)
     for boundary in re.finditer(r'[.!?]+[\"\u201d\u201c\u2019\u00bb)\]]*(?=\s+|$)|\n+', text):
         preceding = text[start:boundary.end()].rstrip()
         if not preceding:
             start = boundary.end()
             continue
-        if not boundary.group().startswith("\n") and period_continues(text, boundary.end()):
+        if not boundary.group().startswith("\n") and (period_continues(text, boundary.end())
+                or any(a < boundary.end() < b for a, b in protected)):
             continue
         end = start + len(text[start:boundary.end()].rstrip())
         while start < end and text[start].isspace():
@@ -263,6 +273,7 @@ class ReadingWindow:
         self.results = queue.Queue()
         self.audio_jobs = None
         self.audio_cache = {}
+        self.speech_cache = AudioCache(self.app_state.path.parent / "speech.sqlite3")
         self.audio_requested = set()
         self.waiting_for = None
         self.voice_results = queue.Queue()
@@ -276,6 +287,7 @@ class ReadingWindow:
         self.volume = tk.DoubleVar(root, settings["volume"])
         self.volume_label = tk.StringVar(root, f'{settings["volume"]}%')
         self.follow = tk.BooleanVar(root, settings["follow"])
+        self.read_citations = tk.BooleanVar(root, settings.get("read_citations", True))
         self.language = tk.StringVar(root, "All languages")
         self.voice_query = ""
         self.favorites_only = tk.BooleanVar(root, False)
@@ -288,7 +300,7 @@ class ReadingWindow:
         self._apply_theme()
         self.reader.set_font_scale(self.font_size / 20)
         self._refresh_voice_choices()
-        for variable in (self.voice, self.rate, self.volume, self.follow):
+        for variable in (self.voice, self.rate, self.volume, self.follow, self.read_citations):
             variable.trace_add("write", self._schedule_settings)
         self.timer = root.after(50, self._poll)
         root.protocol("WM_DELETE_WINDOW", self.close)
@@ -377,6 +389,8 @@ class ReadingWindow:
         ttk.Label(options, textvariable=self.volume_label, width=5, anchor="e").pack(side="left", padx=(4, 8))
         ttk.Checkbutton(options, text="Auto-scroll while reading", variable=self.follow,
                         command=self._follow_changed).pack(side="right")
+        ttk.Checkbutton(options, text="Read citations", variable=self.read_citations,
+                        command=self._citations_changed).pack(side="right", padx=(8, 12))
 
         chapters = ttk.Frame(layout)
         chapters.pack(fill="x", pady=(0, 10))
@@ -390,6 +404,8 @@ class ReadingWindow:
         ttk.Label(chapters, text="Text size:").grid(row=0, column=4, padx=(16, 6))
         IconButton(chapters, "smaller", "Smaller", lambda: self.resize_font(-2)).grid(row=0, column=5, padx=(0, 6))
         IconButton(chapters, "larger", "Larger", lambda: self.resize_font(2)).grid(row=0, column=6)
+        IconButton(chapters, "search", "Search book (Ctrl+F)", self.search_book).grid(row=0, column=7, padx=(10, 0))
+        self.root.bind("<Control-f>", lambda event: self.search_book())
         extras = ttk.Frame(layout)
         page = ttk.Frame(layout)
         page.pack(fill="both", expand=True)
@@ -475,7 +491,8 @@ class ReadingWindow:
         if valid_voice(self.voice.get().strip()):
             settings["voice"] = self.voice.get().strip()
         settings.update(rate=round(self.rate.get()), volume=round(self.volume.get()),
-                        font_size=self.font_size, follow=self.follow.get(), theme=self.theme)
+                        font_size=self.font_size, follow=self.follow.get(), theme=self.theme,
+                        read_citations=self.read_citations.get())
         try:
             self.app_state.save()
         except OSError:
@@ -500,7 +517,8 @@ class ReadingWindow:
         self._set_state("loading")
         sample = ("Willkommen bei YapBook. So klingt diese Stimme beim Vorlesen." if self.voice.get().startswith("de-")
                   else "Welcome to YapBook. This is how this voice sounds when reading a book.")
-        self.audio_jobs.put((self.waiting_for, sample))
+        self.speech_cache.retry_failed()
+        self.audio_jobs.put((self.waiting_for, speech_projection(sample)))
         self._loading_status()
 
     def _finish_preview(self):
@@ -747,7 +765,11 @@ class ReadingWindow:
                 self.section = source_section
                 self._show_chapter(scroll=False)
             label = self.chapters[source_section][1][start:end]
-            self.parts = [(start + offset, text) for offset, text in text_parts(label)]
+            self.parts = [(start + offset, text) for offset, text in text_parts(label)
+                          if self._project_part(source_section, start + offset, text)[0]]
+            if not self.parts:
+                self.navigate_link(section, char)
+                return
             self.part = 0
             self.link_target = (section, char)
             self._highlight((start, end))
@@ -756,7 +778,7 @@ class ReadingWindow:
         self.seek_to_character(char, section)
         self.reader.scroll_to(section, char)
 
-    def seek_to_character(self, char, section=None):
+    def seek_to_character(self, char, section=None, play=True):
         if not self.chapters:
             return
         if self.link_target is not None:
@@ -775,7 +797,7 @@ class ReadingWindow:
             return
         char = max(0, min(char, len(text) - 1))
         # Use exact service boundaries and seek in the existing MP3 when possible.
-        if self.state in ("playing", "paused"):
+        if play and self.state in ("playing", "paused"):
             base = self.parts[self.part][0]
             for cue in self.cues:
                 if base + cue.start_char <= char < base + cue.end_char:
@@ -792,7 +814,71 @@ class ReadingWindow:
         self.stop(reset_timer=False)
         self._prepare_parts(chosen[0])
         self._highlight(chosen)
-        self.toggle_play()
+        if play:
+            self.toggle_play()
+
+    def _citations_changed(self):
+        position, running = self.reading_position, self.state in ("playing", "loading")
+        if position:
+            self.seek_to_character(position[1], position[0], play=False)
+            if running:
+                self.toggle_play()
+
+    def search_book(self):
+        if not self.chapters:
+            self.status.set("Open an EPUB before searching.")
+            return "break"
+        existing = getattr(self, "search_window", None)
+        if existing is not None and existing.winfo_exists():
+            existing.lift()
+            self.search_entry.focus_set()
+            return "break"
+        window = self.search_window = tk.Toplevel(self.root)
+        window.title("YapBook · Search book")
+        window.geometry("660x450")
+        query, count = tk.StringVar(window), tk.StringVar(window, "Search all sections of this book.")
+        entry = self.search_entry = ttk.Entry(window, textvariable=query)
+        entry.pack(fill="x", padx=16, pady=16)
+        ttk.Label(window, textvariable=count).pack(anchor="w", padx=16)
+        frame = ttk.Frame(window)
+        frame.pack(fill="both", expand=True, padx=16, pady=12)
+        listing = ttk.Treeview(frame, columns=("section", "text"), show="headings", selectmode="browse")
+        listing.heading("section", text="Section")
+        listing.heading("text", text="Matching text")
+        listing.column("section", width=140, stretch=False)
+        listing.column("text", width=430)
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=listing.yview)
+        listing.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        listing.pack(fill="both", expand=True)
+        hits, timer = [], [None]
+        book_id = self.book_id
+        def find():
+            timer[0] = None
+            listing.delete(*listing.get_children())
+            hits[:] = search_book(self.chapters, query.get()) if self.book_id == book_id else []
+            count.set(f"{len(hits)} matches · Select a result to go there.")
+            for index, (section, start, end) in enumerate(hits):
+                title, text = self.chapters[section]
+                snippet = text[max(0, start-32):min(len(text), end+70)].replace("\n", " ")
+                listing.insert("", "end", iid=str(index), values=(title, snippet))
+        def schedule(*_):
+            if timer[0] is not None:
+                window.after_cancel(timer[0])
+            timer[0] = window.after(200, find)
+        def select(_=None):
+            if listing.selection() and self.book_id == book_id:
+                section, start, end = hits[int(listing.selection()[0])]
+                running = self.state in ("playing", "loading")
+                self.seek_to_character(start, section, play=running)
+                self.reader.highlight_search(section, start, end)
+        query.trace_add("write", schedule)
+        listing.bind("<<TreeviewSelect>>", select)
+        entry.bind("<Return>", lambda event: find())
+        window.bind("<Escape>", lambda event: window.destroy())
+        apply_theme(window, self.theme == "dark")
+        entry.focus_set()
+        return "break"
 
     def resize_font(self, change):
         self.font_size = max(14, min(36, self.font_size + change))
@@ -878,8 +964,18 @@ class ReadingWindow:
         self.status.set(f"Section {self.section + 1}/{len(self.chapters)} · {title} · Click a sentence to read from there.")
 
     def _prepare_parts(self, start_char=0):
-        self.parts = list(text_parts(self.chapters[self.section][1], start_char))
+        self.parts = list(self._section_parts(self.section, start_char))
         self.part = 0
+
+    def _project_part(self, section, start, text):
+        marked = [(a-start, b-start) for a, b in self.reader.citation_ranges.get(section, [])
+                  if a < start+len(text) and b > start]
+        return speech_projection(text, self.read_citations.get(), marked)
+
+    def _section_parts(self, section, start_char=0):
+        for start, text in text_parts(self.chapters[section][1], start_char):
+            if self._project_part(section, start, text)[0]:
+                yield start, text
 
     def select_chapter(self, _event=None):
         selected = self.chapter_box.current()
@@ -913,6 +1009,7 @@ class ReadingWindow:
                 self._set_state("playing")
                 self._playing_status()
             elif self.state == "idle":
+                self.speech_cache.retry_failed()
                 if not self.chapters:
                     self.choose_book()
                     return
@@ -951,9 +1048,10 @@ class ReadingWindow:
         self.audio_jobs = jobs = queue.Queue()
         voice, rate = self.voice.get().strip(), service_rate(self.rate.get())
         results, progress_events = self.results, self.progress_events
+        speech_cache = self.speech_cache
 
-        # One worker synthesizes in reading order. A session token rejects late
-        # results after Stop or a jump, including failures from prefetched chunks.
+        # Prepare the current and next two sentences concurrently. Generation
+        # tokens detach playback without discarding completed shared cache work.
         def worker():
             while not cancelled.is_set():
                 job = jobs.get()
@@ -962,15 +1060,23 @@ class ReadingWindow:
                 key, text = job
                 try:
                     progress_events.put((token, key, 0))
-                    result = asyncio.run(request_audio(text, voice, rate, cancelled,
-                        progress=lambda count: progress_events.put((token, key, count))))
+                    spoken, offsets = text
+                    prepared, prepared_offsets = prepare_speech(spoken)
+                    offsets = [offsets[index] for index in prepared_offsets]
+                    def load():
+                        audio, cues = asyncio.run(request_audio(prepared, voice, rate, threading.Event(),
+                            progress=lambda count: progress_events.put((token, key, count))))
+                        return audio, [(cue.start_ms, cue.end_ms, cue.start_char, cue.end_char) for cue in cues]
+                    audio, raw_cues = speech_cache.get(prepared, voice, rate, load)
+                    result = (audio, [SentenceCue(a, b, offsets[c], offsets[d-1]+1) for a,b,c,d in raw_cues])
                     if result is not None and not cancelled.is_set():
                         results.put((token, key, result, None))
                 except Exception as exc:
                     if not cancelled.is_set():
                         results.put((token, key, None, audio_error(exc)))
 
-        threading.Thread(target=worker, daemon=True).start()
+        for _ in range(3):
+            threading.Thread(target=worker, daemon=True).start()
 
     def _upcoming_parts(self):
         for start, text in self.parts[self.part:]:
@@ -978,7 +1084,7 @@ class ReadingWindow:
         if self.link_target is not None:
             return
         for section in range(self.section + 1, len(self.chapters)):
-            for start, text in text_parts(self.chapters[section][1]):
+            for start, text in self._section_parts(section):
                 yield (section, start), text
 
     def _queue_upcoming_audio(self):
@@ -990,7 +1096,9 @@ class ReadingWindow:
         for key, text in upcoming:
             if key not in self.audio_requested:
                 self.audio_requested.add(key)
-                self.audio_jobs.put((key, text))
+                projected = speech_projection(text) if self.preview_active else self._project_part(*key, text)
+                if projected[0]:
+                    self.audio_jobs.put((key, projected))
 
     def _play_ready_audio(self):
         if self.state != "loading" or self.waiting_for not in self.audio_cache:
@@ -1016,7 +1124,8 @@ class ReadingWindow:
         self.generation += 1
         self.cancelled.set()
         if self.audio_jobs is not None:
-            self.audio_jobs.put(None)
+            for _ in range(3):
+                self.audio_jobs.put(None)
         self.audio_jobs = None
         self.waiting_for = None
         self.audio_cache.clear()
@@ -1028,10 +1137,12 @@ class ReadingWindow:
             self.status.set("Reading link · Its destination opens when playback finishes.")
         else:
             self.status.set(f"Reading · Section {self.section + 1}/{len(self.chapters)} · Part {self.part + 1}/{len(self.parts)}")
+        if self.speech_cache.warning:
+            self.status.set(self.status.get() + " · " + self.speech_cache.warning)
 
     def _advance_section(self):
         for index in range(self.section + 1, len(self.chapters)):
-            if self.chapters[index][1]:
+            if next(self._section_parts(index), None) is not None:
                 self.section = index
                 self._show_chapter(scroll=self.follow.get())
                 return True
@@ -1146,8 +1257,8 @@ class ReadingWindow:
                 if cue is not None:
                     base = self.parts[self.part][0]
                     self.reading_position = (self.section, base + cue.start_char, base + cue.end_char)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.getLogger(__name__).debug("Could not refresh playback position: %s", type(exc).__name__)
         if self.reading_position == self.saved_position:
             return
         try:

@@ -8,6 +8,7 @@ from PIL import Image, ImageDraw, ImageTk
 
 # A 24-unit vector grid; the same primitives can be exported as editable SVGs.
 ICONS = {
+    "search": [("circle", (3, 3, 16, 16)), ("line", (15, 15, 22, 22))],
     "play": [("polygon", (8, 4, 20, 12, 8, 20))],
     "pause": [("rect", (6, 4, 9, 20)), ("rect", (15, 4, 18, 20))],
     "stop": [("rect", (6, 6, 18, 18))],

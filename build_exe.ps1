@@ -3,7 +3,7 @@ $readerPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $readerPython)) {
     throw 'Please set up the Python environment as described in README.txt first.'
 }
-& $readerPython -m pip install -r (Join-Path $PSScriptRoot 'requirements.txt') 'pyinstaller>=6.15,<7'
+& $readerPython -m pip install --require-hashes -r (Join-Path $PSScriptRoot 'quality\build.lock') --index-url https://pypi.org/simple
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Push-Location -LiteralPath $PSScriptRoot
 try {

@@ -1,5 +1,6 @@
 import { SentenceQueue, sentenceParts } from './text.mjs';
-import { loadAudio } from './bridge.mjs';
+import { loadAudio, speechCache } from './bridge.mjs';
+import { speechProjection } from './reader-text.mjs';
 
 export class ReaderPlayer {
   constructor(changed, position) {
@@ -18,12 +19,15 @@ export class ReaderPlayer {
       if (this.deadline && Date.now() >= this.deadline) { this.pause(); this.setSleep('off'); }
     }, 1000);
   }
-  emit() { this.changed({status:this.status,index:this.index,bytes:this.bytes,error:this.error,cue:this.cue,preview:this.preview,link:this.link?.span,sleep:this.sleep}); }
+  emit() { this.changed({status:this.status,index:this.index,bytes:this.bytes,error:this.error,cue:this.cue,preview:this.preview,link:this.link?.span,sleep:this.sleep,cacheWarning:speechCache.warning}); }
   configure(settings) {
-    const changed = this.settings.voice !== settings.voice || this.settings.rate !== settings.rate;
+    const changed = this.settings.voice !== settings.voice || this.settings.rate !== settings.rate || this.settings.readCitations !== settings.readCitations;
     const running = ['playing','preparing'].includes(this.status) && !this.preview;
     this.settings = settings; this.audio.volume = settings.volume/100;
-    if (changed) { this.stop(); if (running && this.parts.length) this.play(); }
+    if (changed) { this.projectParts(); this.stop(); if (running && this.parts.length) this.play(); }
+  }
+  projectParts() {
+    this.parts=(this.sourceParts || []).map(part=>({...part,speech:speechProjection(part.text,this.settings.readCitations,part.citations)}));
   }
   resetQueue() {
     this.queue?.cancel();
@@ -32,7 +36,7 @@ export class ReaderPlayer {
     }));
   }
   setDocument(index, position) {
-    this.stop(); this.parts = index.parts;
+    this.stop(); this.sourceParts = index.parts; this.projectParts();
     this.index = Math.max(0,this.parts.findIndex(part => part.section === position?.section && part.end > position?.start));
     this.emit();
   }
@@ -61,12 +65,20 @@ export class ReaderPlayer {
     }
     if (!this.parts.length) return;
     if (this.preview) this.stop();
+    if (['idle','error'].includes(this.status)) speechCache.retryFailed();
     if (this.status === 'error') this.resetQueue();
+    while (!this.link && this.index<this.parts.length && !this.parts[this.index].speech.text) this.index++;
+    if (this.index>=this.parts.length) { this.index=Math.max(0,this.parts.length-1);this.status='finished';this.save();this.emit();return; }
     const token = ++this.generation; this.error = ''; this.bytes = 0;
     try {
       if (!(this.status === 'paused' && this.current)) {
-        this.status = 'preparing'; this.cue = null; this.emit();
-        const result = await this.queue.prepare(this.link?.parts || this.parts,this.link?.index ?? this.index);
+        const all=this.link?.parts || this.parts;
+        const current=all[this.link?.index ?? this.index];
+        const audible=all.filter(part=>!part.speech || part.speech.text);
+        const ready=this.queue.ready.get(current.key);
+        this.cue = null;
+        if (!ready) { this.status = 'preparing'; this.emit(); }
+        const result = await this.queue.prepare(audible,audible.indexOf(current));
         if (token !== this.generation) return;
         this.release(); this.current = result;
         this.url = URL.createObjectURL(result.blob); this.audio.src = this.url;
@@ -87,7 +99,9 @@ export class ReaderPlayer {
   }
   readLink(text, complete, span) {
     this.stop();
-    const parts = sentenceParts(text).map((part,index) => ({...part,key:`link:${index}`}));
+    const marked=span ? (this.sourceParts || []).flatMap(part=>part.section===span.section ? (part.citations || []).map(([a,b])=>[part.start+a-span.start,part.start+b-span.start]) : []) : [];
+    const parts = sentenceParts(text).map((part,index) => ({...part,key:`link:${index}`,
+      speech:speechProjection(part.text,this.settings.readCitations,marked.map(([a,b])=>[a-part.start,b-part.start]))})).filter(part=>part.speech.text);
     if (!parts.length) { complete(); return; }
     if (span) {
       const source = this.parts.findIndex(part => part.section === span.section && part.end > span.start);
@@ -100,7 +114,7 @@ export class ReaderPlayer {
     if (this.status !== 'playing') return;
     if (this.link) {
       if (++this.link.index < this.link.parts.length) {
-        this.current = null; this.status = 'preparing'; this.emit();
+        this.current = null; this.emit();
         this.transition = setTimeout(() => this.play(),80);
       } else {
         const complete = this.link.complete;
@@ -115,11 +129,12 @@ export class ReaderPlayer {
       this.status = 'paused'; this.setSleep('off'); this.emit(); return;
     }
     // Separate paragraph/heading requests naturally leave a short breath between blocks.
-    this.status = 'preparing'; this.emit();
+    this.emit();
     this.transition = setTimeout(() => this.play(),previous.section !== this.parts[this.index].section ? 250 : 80);
   }
   setSleep(value) { this.sleep = value; this.deadline = ['15','30'].includes(value) ? Date.now()+Number(value)*60000 : null; this.emit(); }
   async testVoice() {
+    speechCache.retryFailed();
     this.stop(); this.preview = true; this.status = 'preparing'; this.emit();
     const token = this.generation, controller = this.previewController = new AbortController();
     try {

@@ -84,7 +84,20 @@ test('queue prepares current plus exactly two following sentences and reuses the
 });
 test('cancel stops queued requests before they contact the service',async()=>{
   const calls=[],parts=[{key:'0'},{key:'1'},{key:'2'}];
-  let release;const queue=new SentenceQueue(async p=>{calls.push(p.key);await new Promise(r=>release=r);});
-  queue.prepare(parts,0);await new Promise(r=>setTimeout(r,0));queue.cancel();release();
-  await queue.tail.catch(()=>{});assert.deepEqual(calls,['0']);
+  const queue=new SentenceQueue(async p=>{calls.push(p.key);});
+  queue.prepare(parts,0);queue.cancel();
+  await queue.tail;assert.deepEqual(calls,[]);
+});
+
+test('normal continuous reading prepares both next sentences before current finishes',async()=>{
+  const calls=[],release=new Map(),parts=Array.from({length:6},(_,i)=>({key:String(i)}));
+  const queue=new SentenceQueue(p=>{calls.push(p.key);return new Promise(resolve=>release.set(p.key,resolve));});
+  const first=queue.prepare(parts,0);await new Promise(r=>setTimeout(r,0));
+  assert.deepEqual(calls,['0','1','2']);
+  release.get('2')('two');release.get('1')('one');release.get('0')('zero');
+  assert.equal(await first,'zero');await queue.tail;
+  assert.equal(queue.ready.get('1'),'one');
+  assert.equal(await queue.prepare(parts,1),'one');
+  await new Promise(r=>setTimeout(r,0));assert.deepEqual(calls,['0','1','2','3']);
+  release.get('3')('three');await queue.tail;queue.cancel();
 });

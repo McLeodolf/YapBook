@@ -11,7 +11,7 @@ import uuid
 
 DEFAULT_VOICE = "en-US-BrianMultilingualNeural"
 DEFAULT_SETTINGS = {"voice": DEFAULT_VOICE, "rate": 0, "volume": 100,
-                    "font_size": 20, "follow": True, "theme": "light"}
+                    "font_size": 20, "follow": True, "theme": "light", "read_citations": True}
 
 
 def service_rate(display_rate):
@@ -49,6 +49,8 @@ class AppState:
                         self.settings[name] = value
                 if type(settings.get("follow")) is bool:
                     self.settings["follow"] = settings["follow"]
+                if type(settings.get("read_citations")) is bool:
+                    self.settings["read_citations"] = settings["read_citations"]
                 if settings.get("theme") in ("light", "dark"):
                     self.settings["theme"] = settings["theme"]
             favorites = data.get("favorites", [])

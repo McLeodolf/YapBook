@@ -73,6 +73,11 @@ export async function openEpub(blob) {
     const paths = new Map(ordered.map((item,i) => [item.path,i]));
     const sections = ordered.map((item,i) => {
       const doc = new DOMParser().parseFromString(read(item.path),'text/html');
+      for(const node of doc.body.querySelectorAll('*')) {
+        const kinds=((node.getAttribute('epub:type') || '')+' '+(node.getAttribute('role') || '')).split(/\s+/);
+        const numberedLink=node.tagName==='A' && /^[\[\]()\d⁰¹²³⁴⁵⁶⁷⁸⁹\s]+$/u.test(node.textContent) && /(?:#|[/_\-])(?:fn|ftn|footnote|endnote|note|ref)[_\-]?\d/i.test(node.getAttribute('href') || '');
+        if(kinds.some(kind=>['noteref','biblioref','doc-noteref','doc-biblioref'].includes(kind)) || node.tagName==='SUP' && node.querySelector('a[href]') || numberedLink) node.dataset.readerCitation='true';
+      }
       let css = '';
       for (const style of doc.querySelectorAll('style,link[rel="stylesheet"]')) {
         const path = style.tagName === 'LINK' ? local(style.getAttribute('href'),item.path) : item.path;
@@ -102,7 +107,7 @@ export async function openEpub(blob) {
     });
     const csp = "default-src 'none'; img-src blob: data:; font-src blob: data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'";
     const srcdoc = `<!doctype html><html lang="${escape(language)}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>
-      :root{color-scheme:light}html{font-size:20px;scroll-behavior:auto}body{margin:0 auto;padding:36px clamp(20px,3vw,36px) 50vh;color:#28313c;background:#fffdf8;font:1rem/1.85 Georgia,serif;overflow-wrap:anywhere}.book-section{position:relative;isolation:isolate;overflow:hidden;padding:16px 0 48px;border-bottom:1px solid #e8e3d8;margin-bottom:48px}img,svg{max-width:100%;height:auto}h1,h2,h3{line-height:1.3}p{margin-block:1em}a{color:inherit}::highlight(spoken){background:#ffe17a;color:#25281f}::selection{background:#ffe17a} ${sections.map(s=>s.css).join('\n').replace(/<\/style/gi,'')}
+      :root{color-scheme:light}html{font-size:20px;scroll-behavior:auto}body{margin:0 auto;padding:36px clamp(20px,3vw,36px) 50vh;color:#28313c;background:#fffdf8;font:1rem/1.85 Georgia,serif;overflow-wrap:anywhere}.book-section{position:relative;isolation:isolate;overflow:hidden;padding:16px 0 48px;border-bottom:1px solid #e8e3d8;margin-bottom:48px}img,svg{max-width:100%;height:auto}h1,h2,h3{line-height:1.3}p{margin-block:1em}a{color:inherit}::highlight(search){background:#92d9f0;color:#111827}::highlight(spoken){background:#ffe17a;color:#25281f}::selection{background:#ffe17a} ${sections.map(s=>s.css).join('\n').replace(/<\/style/gi,'')}
       :root[data-theme=dark]{color-scheme:dark;background:#161e24!important}html[data-theme=dark] body{background:#161e24!important;color:#d5ded9!important}html[data-theme=dark] .book-section,html[data-theme=dark] .book-section *:not(img):not(svg):not(svg *){color:#d5ded9!important;background-color:transparent!important;border-color:#36463e!important}html[data-theme=dark] a{color:#9fc9b1!important}html[data-theme=dark] ::highlight(spoken){background:#e8bd58;color:#18221d}html[data-theme=dark] ::selection{background:#e8bd58;color:#18221d}
       </style></head><body>${sections.map(s=>s.html).join('\n')}</body></html>`;
     return {id,title,language,sections,srcdoc,dispose:()=>{for(const url of urls.values()) URL.revokeObjectURL(url);}};
@@ -112,8 +117,8 @@ export async function openEpub(blob) {
 export function indexDocument(doc, book) {
   const sections = [], parts = [];
   for (const element of doc.querySelectorAll('.book-section')) {
-    const spans = []; let text = '', space = '';
-    const walk = node => {
+    const spans = [], citations = []; let text = '', space = '';
+    const walk = (node, reference=false) => {
       if (node.nodeType === 3) {
         for (const match of node.data.matchAll(/\s+|\S+/g)) {
           if (/^\s/.test(match[0])) { if (space !== '\n') space = ' '; continue; }
@@ -121,6 +126,7 @@ export function indexDocument(doc, book) {
           space = '';
           const start = text.length; text += match[0];
           spans.push({start,end:text.length,node,offset:match.index});
+          if(reference) citations.push([start,text.length]);
         }
       } else if (node.nodeType === 1) {
         if (['SCRIPT','STYLE','NOSCRIPT','SVG','RT','RP'].includes(node.tagName) || node.hidden || node.getAttribute('aria-hidden') === 'true') return;
@@ -128,15 +134,16 @@ export function indexDocument(doc, book) {
         if (style.display === 'none' || style.visibility === 'hidden') return;
         const block = !['inline','inline-block','contents'].includes(style.display) || node.tagName === 'BR';
         if (block) space = '\n';
-        for (const child of node.childNodes) walk(child);
+        for (const child of node.childNodes) walk(child,reference || node.dataset.readerCitation==='true');
         if (block) space = '\n';
       }
     };
     walk(element);
     const section = sections.length;
-    sections.push({text,spans,element});
+    sections.push({text,spans,element,citations});
     let locale = book.language; try { new Intl.Segmenter(locale); } catch { locale = 'en'; }
-    for (const part of sentenceParts(text,0,locale)) parts.push({...part,section,key:`${section}:${part.start}`});
+    for (const part of sentenceParts(text,0,locale)) parts.push({...part,section,key:`${section}:${part.start}`,
+      citations:citations.filter(([a,b])=>a<part.end && b>part.start).map(([a,b])=>[a-part.start,b-part.start])});
   }
   if (!parts.length) throw new Error('This EPUB has no selectable text. It may contain only pictures.');
   return {sections,parts};

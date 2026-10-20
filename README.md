@@ -18,6 +18,10 @@ For the browser version and free Streamlit deployment, see [web/README.md](web/R
 - Play, pause, resume, stop, and optional automatic scrolling.
 - Voice selection, compact speed and volume sliders, text size, and section navigation.
 - Background preparation of the next two sentences, including across section boundaries.
+- Search the entire open EPUB with the magnifying glass or Ctrl+F, then select a result to jump there.
+- A saved **Read citations** checkbox: turn it off to omit recognized author–year references, numbered citations and marked footnote references from speech. Original book text remains visible; quotations and mathematical superscripts are retained. Citation recognition is conservative and unusual formats may still be read.
+- Sentence boundaries keep references such as `Smith et al. (2021)` together.
+- Three bounded speech jobs prepare the current sentence and the next two concurrently. Successful audio is cached locally by spoken text, voice and effective speed; identical in-flight requests share one result.
 - A saved reading position for each EPUB, restored when you reopen it.
 - An English desktop interface and a command-line reader.
 - Voice preview, language/name filters and favorite voices.
@@ -28,6 +32,8 @@ For the browser version and free Streamlit deployment, see [web/README.md](web/R
 - Audio loading time and received bytes, cancellable requests and a 90-second deadline.
 
 YapBook requires Windows and an internet connection for speech. Text for the current sentence and up to two upcoming sentences is sent to Microsoft's online speech service. EPUB images and styles are loaded locally. The speech client is unofficial, so service availability may change.
+
+The desktop audio cache is `%LOCALAPPDATA%\YapBook\speech.sqlite3`; the web cache is in this browser's IndexedDB. Stop, pause, seeking and reopening a book reuse completed audio. A started request may finish into the cache after Stop; queued playback is detached. Failed requests require an explicit retry. Changing voice, speed or spoken text requires different audio. Clearing app/browser data, unavailable storage or closing during an unfinished request can require another request; caches do not synchronize between devices. The cache grows as new text is read and is not automatically deleted.
 
 ## Run from source
 
@@ -120,3 +126,11 @@ These tests use generated sample text and do not call the online speech service.
 - Complex browser layouts, embedded web fonts, and advanced SVG artwork may render differently.
 - The next two audio chunks are prepared in the background to reduce loading pauses. Slow service responses or brief player transitions can still cause gaps.
 - The desktop interface and Windows audio player cannot run in a web browser; a hosted version needs a browser reader and audio player.
+# Development quality gates
+
+The quality-gate framework and its current activation status are documented in
+[the assessment](docs/quality/01-assessment.md),
+[operations and validation](docs/quality/05-operations-and-validation.md), and
+[the readiness report](docs/quality/06-readiness.md).
+Run `python -m quality.run` from a prepared development environment. Local results
+do not replace independent review or verified GitHub merge protection.

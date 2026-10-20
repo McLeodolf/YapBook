@@ -15,6 +15,7 @@ class HtmlBookView(HtmlFrame):
         self.chapter_ranges = []
         self.offsets = []
         self.chapters = []
+        self.citation_ranges = {}
         self.highlighted_text = ""
         self.dark = False
         super().__init__(master, messages_enabled=False, threading_enabled=False,
@@ -155,6 +156,19 @@ class HtmlBookView(HtmlFrame):
             self.chapter_ranges.append((start, end))
             self.offsets.append(offsets)
             self.chapters.append((self.model.sections[index].title, "".join(pieces)))
+        self.citation_ranges = {}
+        for node in self.document.querySelectorAll('[data-reader-citation="true"]'):
+            span = self._node_span(node.node)
+            if span:
+                section, start, end = span
+                self.citation_ranges.setdefault(section, []).append((start, end))
+
+    def highlight_search(self, section, start, end):
+        self.html.tag("delete", "reader-search")
+        offsets = self.offsets[section]
+        self.html.tag("configure", "reader-search", "-background", "#92d9f0", "-foreground", "#111827")
+        self.html.tag("add", "reader-search", *self.html.text("index", offsets[start], offsets[end-1]+1))
+        self.scroll_to(section, start)
 
     def clear_highlight(self):
         self.html.tag("delete", "reader-spoken")

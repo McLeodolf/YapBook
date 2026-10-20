@@ -1,0 +1,245 @@
+{
+  "schema_version": 1,
+  "repository": "McLeodolf/YapBook",
+  "required_check": "quality/gate",
+  "protected_branches": [
+    "main",
+    "feat/streamlit-reader"
+  ],
+  "required_stages": [
+    "security",
+    "dependencies",
+    "code",
+    "desktop-tests",
+    "web-tests",
+    "frontend-tests",
+    "browser-tests",
+    "governance-tests",
+    "coverage",
+    "traceability"
+  ],
+  "test_stages": [
+    "desktop-tests",
+    "web-tests",
+    "frontend-tests",
+    "browser-tests",
+    "governance-tests"
+  ],
+  "risk_paths": {
+    "low": [
+      "*.md",
+      "*.txt",
+      "docs/*",
+      "assets/*",
+      "web/frontend/src/*.css"
+    ],
+    "medium": [
+      "*.py",
+      "web/frontend/src/*",
+      "requirements*",
+      "web/requirements*",
+      "web/frontend/package*.json"
+    ],
+    "high": [
+      "quality/*",
+      ".github/*",
+      "epub_document.py",
+      "html_reader.py",
+      "audio_cache.py",
+      "reading_positions.py",
+      "web/speech_service.py",
+      "web/frontend/src/lib/epub.mjs",
+      "web/frontend/src/lib/storage.mjs",
+      "build_exe.ps1"
+    ]
+  },
+  "reviewers": {
+    "peer": [
+      "McLeodolf"
+    ],
+    "architecture": [
+      "McLeodolf"
+    ],
+    "security": [
+      "McLeodolf"
+    ]
+  },
+  "reviews": {
+    "low": {
+      "count": 1,
+      "roles": [
+        "peer"
+      ]
+    },
+    "medium": {
+      "count": 1,
+      "roles": [
+        "architecture"
+      ]
+    },
+    "high": {
+      "count": 2,
+      "roles": [
+        "architecture",
+        "security"
+      ]
+    }
+  },
+  "dependency_paths": [
+    "requirements*",
+    "web/requirements*",
+    "quality/*.in",
+    "quality/*.lock",
+    "quality/dependencies.json",
+    "web/frontend/package*.json"
+  ],
+  "registries": {
+    "python": [
+      "https://pypi.org/simple"
+    ],
+    "npm": [
+      "https://registry.npmjs.org/"
+    ]
+  },
+  "coverage": {
+    "approval": {
+      "reviewer": null,
+      "review_url": null,
+      "revision": null
+    },
+    "baseline_date": "2026-10-20",
+    "basis": "Measured working tree at aa89020 plus existing reader features. Floors round measured percentages down to one decimal. Human approval pending.",
+    "components": {
+      "desktop": {
+        "line": 79.9,
+        "branch": 68.7,
+        "changed_line": 79.9,
+        "changed_branch": 68.7
+      },
+      "web": {
+        "line": 63.8,
+        "branch": 57.5,
+        "changed_line": 63.8,
+        "changed_branch": 57.5
+      },
+      "frontend": {
+        "line": 84.1,
+        "branch": 79.2,
+        "changed_line": 84.1,
+        "changed_branch": 79.2
+      },
+      "governance": {
+        "line": 77.3,
+        "branch": 72.7,
+        "changed_line": 77.3,
+        "changed_branch": 72.7
+      }
+    },
+    "desktop_sources": [
+      "app_branding.py",
+      "app_state.py",
+      "audio_cache.py",
+      "epub_document.py",
+      "follow_reader.py",
+      "gui_entry.py",
+      "html_reader.py",
+      "read_epub.py",
+      "reader_text.py",
+      "reading_positions.py",
+      "ui_icons.py",
+      "ui_theme.py",
+      "windows_audio.py"
+    ],
+    "exclusions": {
+      "test_*.py": "Test code is measured by execution counts, not production coverage.",
+      "web/tests/*": "Backend test code.",
+      "verify_live_*.py": "Optional live voice-service acceptance scripts, not shipped application logic.",
+      "web/frontend/dist/*": "Generated code; source coverage plus verified build is authoritative.",
+      "quality bootstrap/runner/protection helpers": "Verified by integration executions and focused contract tests; numeric governance floor covers the decision, coverage and privileged controller modules. Expanding this floor requires measurement and human approval."
+    },
+    "governance_sources": [
+      "quality/gate.py",
+      "quality/coverage_check.py",
+      "quality/controller.py"
+    ]
+  },
+  "exceptions": {
+    "maximum_days": 30,
+    "non_waivable": [
+      "SEC-SECRET",
+      "DEP-MALICIOUS",
+      "DEP-SOURCE",
+      "ARCH",
+      "REVISION",
+      "EVIDENCE",
+      "BASELINE",
+      "TEST",
+      "EXCEPTION",
+      "CI-INTEGRITY"
+    ],
+    "merge_policy": "Recorded approved exceptions remain merge-blocking until a trusted merge-time expiry control exists; native GitHub status checks have no TTL."
+  },
+  "tools": {
+    "python": "3.14",
+    "node": "24.19.0",
+    "uv": "0.12.10",
+    "coverage": "7.16.2",
+    "semgrep": "1.181.0",
+    "bandit": "1.9.4",
+    "pip-audit": "2.10.1",
+    "ruff": "0.17.1",
+    "mypy": "2.4.0",
+    "gitleaks": {
+      "version": "8.30.1",
+      "windows": {
+        "asset": "gitleaks_8.30.1_windows_x64.zip",
+        "sha256": "d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e"
+      },
+      "linux": {
+        "asset": "gitleaks_8.30.1_linux_x64.tar.gz",
+        "sha256": "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+      }
+    },
+    "semgrep_assets": {
+      "linux": {
+        "url": "https://files.pythonhosted.org/packages/b0/1d/aed54e9cea5491f0dd54286126216f97ef817a356734d3c9d5e40c124c34/semgrep-1.181.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-manylinux_2_34_x86_64.whl",
+        "sha256": "c142ec04a2ed144970cb0a92f6877651dd3c088505eec737bb7f4db7ae5f0ffa"
+      },
+      "windows": {
+        "url": "https://files.pythonhosted.org/packages/53/d0/c35c85e860b722b86108ecef78c104558d65fddb6d00e6e83be54b4b263b/semgrep-1.181.0-cp310.cp311.cp312.cp313.cp314.py310.py311.py312.py313.py314-none-win_amd64.whl",
+        "sha256": "c3d7295bfd26f994231d82145888bd0a73ef0ad66ffb0c0341f0350a90ac3136"
+      }
+    }
+  },
+  "approved_workflow_hashes": [],
+  "license_policy": {
+    "permitted": [
+      "MIT",
+      "Apache-2.0",
+      "BSD-2-Clause",
+      "BSD-3-Clause",
+      "ISC",
+      "0BSD",
+      "CC0-1.0",
+      "Unlicense",
+      "Python-2.0",
+      "PSF-2.0",
+      "MIT-CMU",
+      "MPL-2.0",
+      "BlueOak-1.0.0"
+    ],
+    "manual_review": [
+      "AGPL",
+      "GPL",
+      "LGPL",
+      "UNKNOWN"
+    ],
+    "note": "Copyleft, custom and unknown metadata require a package-specific decision. Existing use is not automatic approval. This is a review policy, not legal advice."
+  },
+  "evidence_maximum_hours": 24,
+  "native_tool_review": {
+    "reviewer": null,
+    "review_url": null,
+    "scope": "Pinned Semgrep CE engine and its bundled native libraries"
+  }
+}

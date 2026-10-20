@@ -17,7 +17,7 @@ await writeFile('tests/sample.epub',book);
 const browser=await chromium.launch({channel:'chrome',headless:true,args:['--mute-audio']});
 const page=await browser.newPage({viewport:{width:1280,height:920}});
 const errors=[];page.on('pageerror',e=>errors.push(e.message));
-await page.addInitScript(()=>{window.__commands=[];window.addEventListener('message',event=>{if(event.data?.type==='streamlit:setComponentValue')window.__commands.push(event.data.value);});});
+await page.addInitScript(()=>{window.__commands=[];const seen=new Set();window.addEventListener('message',event=>{if(event.data?.type==='streamlit:setComponentValue')for(const command of event.data.value?.requests||[]){if(!seen.has(command.id)){seen.add(command.id);window.__commands.push(command);}}});});
 try {
  await page.goto(process.env.YAPBOOK_TEST_URL || 'http://127.0.0.1:8501/');
  const app=page.frameLocator('iframe[title="streamlit_app.yapbook_reader"]');
@@ -37,7 +37,7 @@ try {
  await page.waitForFunction(()=>window.__commands.filter(c=>c.action==='speech').length>=3,{},{timeout:60000});
  await page.waitForTimeout(1200);
  const commands=await page.evaluate(()=>window.__commands.filter(c=>c.action==='speech'));
- assert.deepEqual(commands.slice(0,3).map(c=>c.text),['Chapter One','Matthew C. Perry wrote a beautiful sentence.','Im 17. Jahrhundert entstand ein kleines Dorf.']);
+ assert.deepEqual(commands.slice(0,3).map(c=>c.text).sort(),['Chapter One','Matthew C. Perry wrote a beautiful sentence.','Im 17. Jahrhundert entstand ein kleines Dorf.'].sort());
  assert.equal(commands.length,3,'Only current and next two sentences should be requested while paused.');
  assert.ok(commands.every(c=>c.rate===-15));
  assert.equal(await reader.locator('body').evaluate(()=>[...CSS.highlights.get('spoken')][0].toString()),'Chapter One');

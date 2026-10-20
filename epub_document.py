@@ -17,7 +17,8 @@ BOOK_ORIGIN = "https://epub.local/"
 
 
 def fragment_id(section, original):
-    digest = hashlib.sha1(original.encode("utf-8")).hexdigest()[:16]
+    # Stable DOM identifiers, not authentication or integrity checks.
+    digest = hashlib.sha1(original.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
     return f"reader-s{section}-{digest}"
 
 
@@ -139,6 +140,7 @@ class EpubDocument:
         return "\n".join(output)
 
     def build_page(self):
+        from reader_text import mark_citations
         styles, pages = {}, []
         lookup = {section.name: i for i, section in enumerate(self.sections)}
         for index, section in enumerate(self.sections):
@@ -150,6 +152,7 @@ class EpubDocument:
                     body.append(child.extract())
                 soup.append(body)
             base = resource_url(section.name)
+            mark_citations(body)
             css_classes = []
             for style in soup.find_all(["style", "link"]):
                 if style.name == "link":
@@ -162,7 +165,7 @@ class EpubDocument:
                         continue
                 else:
                     css_base, source = base, style.get_text()
-                key = "reader-css-" + hashlib.sha1((css_base + str(source)).encode("utf-8")).hexdigest()[:12]
+                key = "reader-css-" + hashlib.sha1((css_base + str(source)).encode("utf-8"), usedforsecurity=False).hexdigest()[:12]
                 if key not in styles:
                     styles[key] = self._css(source, "." + key, css_base)
                 css_classes.append(key)

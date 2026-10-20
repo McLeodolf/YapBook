@@ -1,16 +1,13 @@
 import { Streamlit } from 'streamlit-component-lib';
 import { alignBoundaries } from './text.mjs';
+import { AudioCache } from './audio-cache.mjs';
+import { getSpeech, putSpeech } from './storage.mjs';
+import { SpeechRPC } from './rpc.mjs';
 
-let pending;
+const rpc = new SpeechRPC(command => Streamlit.setComponentValue(command));
+export const speechCache = new AudioCache(getSpeech, putSpeech);
 Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, event => {
-  const reply = event.detail.args.reply;
-  if (!pending || reply?.id !== pending.id) return;
-  if (reply.status === 'ready') {
-    Streamlit.setComponentValue({id:reply.id,action:'ack'});
-    pending.resolve(reply.result);
-  }
-  else if (reply.status === 'error') pending.reject(new Error(reply.error));
-  else pending.progress?.(reply.bytes || 0);
+  rpc.receive(event.detail.args.reply);
 });
 Streamlit.setComponentReady();
 export function resizeFrame() {
@@ -18,26 +15,27 @@ export function resizeFrame() {
   try { height = window.parent.innerHeight; } catch { /* Cross-origin embedding uses the current frame size. */ }
   Streamlit.setFrameHeight(Math.max(640, height));
 }
-export function request(action, fields = {}, signal, progress) {
-  if (pending) pending.reject(new DOMException('Superseded', 'AbortError'));
-  const id = crypto.randomUUID();
-  return new Promise((resolve, reject) => {
-    let timer;
-    const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', abort); if (pending?.id === id) pending = null; };
-    const abort = () => {
-      if (pending?.id === id) Streamlit.setComponentValue({id: crypto.randomUUID(), action: 'cancel'});
-      cleanup(); reject(new DOMException('Cancelled', 'AbortError'));
-    };
-    pending = {id, progress, resolve: value => { cleanup(); resolve(value); }, reject: error => { cleanup(); reject(error); }};
-    if (signal?.aborted) { abort(); return; }
-    signal?.addEventListener('abort', abort, {once: true});
-    timer = setTimeout(() => { if (pending?.id === id) { Streamlit.setComponentValue({id:crypto.randomUUID(),action:'cancel'}); pending.reject(new Error('The connection timed out. Please retry.')); } }, 100000);
-    Streamlit.setComponentValue({ id, action, ...fields });
-  });
+export function request(action, fields = {}, signal, progress, cancelQueuedOnly=false) {
+  return rpc.request(action,fields,signal,progress,cancelQueuedOnly);
 }
 export async function loadAudio(part, voice, rate, signal, progress) {
-  const result = await request('speech', {text:part.text, voice, rate:rate - 15}, signal, progress);
-  signal.throwIfAborted();
+  signal?.throwIfAborted();
+  const text=part.speech?.text ?? part.text;
+  // The shared request finishes even if this playback consumer stops or seeks.
+  let result;
+  for(;;) {
+    try {
+      result=await speechCache.get(text,voice,rate-15,()=>request('speech',{text,voice,rate:rate-15},signal,progress,true));
+      break;
+    } catch(error) {
+      // A previous consumer may cancel before transmission. Active consumers
+      // can schedule it again; a sent request is never cancelled this way.
+      if(error.name!=='AbortError' || signal?.aborted)throw error;
+    }
+  }
+  signal?.throwIfAborted();
   const bytes = Uint8Array.from(atob(result.audio), letter => letter.charCodeAt(0));
-  return {blob:new Blob([bytes], {type:'audio/mpeg'}), cues:alignBoundaries(part.text, result.boundaries)};
+  let cues=alignBoundaries(text,result.boundaries);
+  if(part.speech) cues=cues.map(cue=>({...cue,start:part.speech.offsets[cue.start],end:part.speech.offsets[cue.end-1]+1}));
+  return {blob:new Blob([bytes], {type:'audio/mpeg'}), cues};
 }
