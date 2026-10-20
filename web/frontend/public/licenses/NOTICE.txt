@@ -8,3 +8,13 @@ apache-arrow-LICENSE.txt.txt. Source: https://github.com/streamlit/streamlit
 The other named files in this directory contain the original license text
 for React, React DOM, Lucide, fflate, DOMPurify, and Apache Arrow.
 Dependencies are pinned by the committed package-lock.json.
+
+Kokoro GPU browser runtime:
+- kokoro-js 1.2.1: https://github.com/hexgrad/kokoro (Apache-2.0)
+- Transformers.js 3.8.1: https://github.com/huggingface/transformers.js (Apache-2.0)
+- phonemizer 1.2.1: https://github.com/xenova/phonemizer.js (Apache-2.0)
+- ONNX Runtime: https://github.com/microsoft/onnxruntime (MIT; runtime commit 89f8206ba4f1c22c39e0297fb55272e8ce8cd7d0)
+- Additional bundled dependencies: Hugging Face Jinja (MIT), FlatBuffers (Apache-2.0), Long.js (Apache-2.0), protobuf.js (BSD-3-Clause).
+The matching original license texts are included beside this notice.
+Kokoro model and voice data are downloaded on demand from
+https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX (Apache-2.0).

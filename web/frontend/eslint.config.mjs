@@ -1,7 +1,7 @@
 import security from 'eslint-plugin-security';
 import noUnsanitized from 'eslint-plugin-no-unsanitized';
 
-const browserNames = ['window','document','location','navigator','localStorage','indexedDB','IDBKeyRange','Audio','EventTarget','URL','Blob','File','DOMParser','CSSStyleSheet','CSSRule','Node','CSS','Highlight','TextDecoder','TextEncoder','AbortController','DOMException','crypto','performance','atob','btoa','setTimeout','clearTimeout','setInterval','clearInterval','queueMicrotask','console','requestAnimationFrame','cancelAnimationFrame','fetch'];
+const browserNames = ['Worker','self','window','document','location','navigator','localStorage','indexedDB','IDBKeyRange','Audio','EventTarget','URL','Blob','File','DOMParser','CSSStyleSheet','CSSRule','Node','CSS','Highlight','TextDecoder','TextEncoder','AbortController','DOMException','crypto','performance','atob','btoa','setTimeout','clearTimeout','setInterval','clearInterval','queueMicrotask','console','requestAnimationFrame','cancelAnimationFrame','fetch'];
 export default [{
   files: ['**/*.mjs','**/*.jsx'],
   ignores: ['dist/**','node_modules/**','test-output/**'],

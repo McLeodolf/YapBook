@@ -34,11 +34,11 @@ try {
  await app.getByRole('button',{name:'Play',exact:true}).click();
  await app.locator('.status').filter({hasText:'Reading'}).waitFor({timeout:60000});
  await app.getByRole('button',{name:'Pause',exact:true}).click();
- await page.waitForFunction(()=>window.__commands.filter(c=>c.action==='speech').length>=3,{},{timeout:60000});
+ await page.waitForFunction(()=>window.__commands.filter(c=>c.action==='speech').length>=6,{},{timeout:60000});
  await page.waitForTimeout(1200);
  const commands=await page.evaluate(()=>window.__commands.filter(c=>c.action==='speech'));
- assert.deepEqual(commands.slice(0,3).map(c=>c.text).sort(),['Chapter One','Matthew C. Perry wrote a beautiful sentence.','Im 17. Jahrhundert entstand ein kleines Dorf.'].sort());
- assert.equal(commands.length,3,'Only current and next two sentences should be requested while paused.');
+ assert.deepEqual(commands.map(c=>c.text).sort(),['Chapter One','Matthew C. Perry wrote a beautiful sentence.','Im 17. Jahrhundert entstand ein kleines Dorf.','Wir feiern ihren 105. Geburtstag.','A quiet test paragraph number 1.','This text is invented for testing.'].sort());
+ assert.equal(commands.length,6,'Only current and next five sentences should be requested while paused.');
  assert.ok(commands.every(c=>c.rate===-15));
  assert.equal(await reader.locator('body').evaluate(()=>[...CSS.highlights.get('spoken')][0].toString()),'Chapter One');
  await app.getByRole('button',{name:'Bookmarks',exact:true}).click();
@@ -85,6 +85,6 @@ try {
  const highlight=await reader.locator('body').evaluate(()=>{const r=[...CSS.highlights.get('spoken')][0].getBoundingClientRect();return {top:r.top,bottom:r.bottom,height:innerHeight};});
  assert.ok(highlight.top>=0&&highlight.bottom<=highlight.height,'The current sentence should remain visible after resizing.');
  assert.deepEqual(errors,[]);
- console.log('PASS: EPUB formatting, all sections, live speech, exactly two preloaded sentences, -15% default, highlighting, click-to-jump, bookmarks, resume, mobile layout.');
+ console.log('PASS: EPUB formatting, all sections, live speech, exactly five preloaded sentences, -15% default, highlighting, click-to-jump, bookmarks, resume, mobile layout.');
 } catch(error) { await page.screenshot({path:'tests/web-failure.png',fullPage:true}); console.log('Browser errors:',errors); throw error; }
 finally { await browser.close(); }

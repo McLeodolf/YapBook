@@ -1,6 +1,8 @@
+import { PREFETCH_AHEAD } from './text.mjs';
+
 // Streamlit can coalesce rapid updates. Every message contains all active jobs.
 export class SpeechRPC {
-  constructor(send, limit=3, timeout=135000) {
+  constructor(send, limit=PREFETCH_AHEAD+1, timeout=135000) {
     this.send=send; this.limit=limit; this.timeout=timeout;
     this.pending=new Map(); this.acknowledged=new Set();
   }

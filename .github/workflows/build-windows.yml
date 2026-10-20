@@ -22,7 +22,7 @@ jobs:
         run: |
           python -m venv .venv
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./build_exe.ps1
+          ./scripts/build_exe.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $testResult = Join-Path $PWD 'exe-self-test.txt'
           Start-Process -FilePath (Join-Path $PWD 'dist/YapBook.exe') -ArgumentList @('--self-test', $testResult) -WindowStyle Hidden -Wait

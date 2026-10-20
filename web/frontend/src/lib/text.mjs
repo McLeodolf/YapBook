@@ -1,4 +1,5 @@
 import { citationSpans } from './reader-text.mjs';
+export const PREFETCH_AHEAD = 5;
 export const DEFAULT_VOICE = 'en-US-BrianMultilingualNeural';
 const titles = new Set('dr. prof. mr. mrs. ms. st. rev. capt. cmdr. lt. gen. col. sgt. adm. sen. rep.'.split(' '));
 const abbreviations = new Set('bzw. z.b. u.a. d.h. e.g. i.e. ca. vgl.'.split(' '));
@@ -102,24 +103,39 @@ export function alignBoundaries(text, events) {
 }
 
 export class SentenceQueue {
-  constructor(load, count = 3) { this.load = load; this.count = count; this.entries = new Map(); this.ready = new Map(); this.controller = new AbortController(); }
+  constructor(load, count = PREFETCH_AHEAD + 1) {
+    this.load = load; this.count = count;
+    this.entries = new Map(); this.ready = new Map(); this.controllers = new Map();
+    this.controller = new AbortController();
+  }
+  retain(parts, index) {
+    const wanted = new Set(parts.slice(Math.max(0,index-PREFETCH_AHEAD),index+this.count).map(part=>part.key));
+    for (const key of this.entries.keys()) if (!wanted.has(key)) {
+      this.controllers.get(key)?.abort(); this.controllers.delete(key);
+      this.entries.delete(key); this.ready.delete(key);
+    }
+  }
   prepare(parts, index) {
-    const wanted = new Set(parts.slice(index, index + this.count).map(part => part.key));
-    for (const key of this.entries.keys()) if (!wanted.has(key)) this.entries.delete(key);
-    for (const key of this.ready.keys()) if (!wanted.has(key)) this.ready.delete(key);
-    for (const part of parts.slice(index, index + this.count)) if (!this.entries.has(part.key)) {
+    this.retain(parts,index);
+    for (const part of parts.slice(index,index+this.count)) if (!this.entries.has(part.key)) {
+      const controller = new AbortController();
+      this.controllers.set(part.key,controller);
       const promise = Promise.resolve().then(() => {
-        this.controller.signal.throwIfAborted();
-        return this.load(part, this.controller.signal);
+        this.controller.signal.throwIfAborted(); controller.signal.throwIfAborted();
+        return this.load(part,controller.signal);
       }).then(result => {
-        if (!this.controller.signal.aborted && this.entries.has(part.key)) this.ready.set(part.key,result);
+        if (!controller.signal.aborted && this.entries.get(part.key)===promise) this.ready.set(part.key,result);
         return result;
       });
       promise.catch(() => {});
-      this.entries.set(part.key, promise);
+      this.entries.set(part.key,promise);
     }
     this.tail = Promise.allSettled(this.entries.values());
     return this.entries.get(parts[index]?.key);
   }
-  cancel() { this.controller.abort(); this.entries.clear(); this.ready.clear(); }
+  cancel() {
+    this.controller.abort();
+    for (const controller of this.controllers.values()) controller.abort();
+    this.controllers.clear(); this.entries.clear(); this.ready.clear();
+  }
 }

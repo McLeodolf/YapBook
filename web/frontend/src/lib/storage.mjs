@@ -1,4 +1,5 @@
-const FALLBACK = { voice: 'en-US-BrianMultilingualNeural', rate: 0, volume: 100, fontSize: 20, follow: true, readCitations: true, theme: 'light', favorites: [] };
+import {isKokoroVoice,selectEngine} from './kokoro-config.mjs';
+const FALLBACK = { engine:'edge', edgeVoice:'en-US-BrianMultilingualNeural', kokoroVoice:'af_heart', voice: 'en-US-BrianMultilingualNeural', rate: 0, volume: 100, fontSize: 20, follow: true, readCitations: true, theme: 'light', favorites: [] };
 export function readSettings() {
   let value; try { value = JSON.parse(localStorage.getItem('yapbook-settings') || '{}'); } catch { value = {}; }
   if (!value || typeof value !== 'object') value = {};
@@ -11,7 +12,12 @@ export function readSettings() {
   if (typeof value.readCitations === 'boolean') result.readCitations = value.readCitations;
   if (['light','dark'].includes(value.theme)) result.theme = value.theme;
   if (Array.isArray(value.favorites)) result.favorites = value.favorites.filter(item => typeof item === 'string' && item.endsWith('Neural'));
-  return result;
+  if(typeof value.edgeVoice==='string' && /^[a-z]{2,3}-[A-Z]{2}-.+Neural$/.test(value.edgeVoice))result.edgeVoice=value.edgeVoice;
+  else result.edgeVoice=result.voice;
+  if(isKokoroVoice(value.kokoroVoice))result.kokoroVoice=value.kokoroVoice;
+  if(value.engine==='kokoro') {result.engine='kokoro';result.voice=isKokoroVoice(value.voice)?value.voice:result.kokoroVoice;}
+  if(Array.isArray(value.favorites))result.favorites=value.favorites.filter(item=>typeof item==='string' && (item.endsWith('Neural') || isKokoroVoice(item)));
+  return selectEngine(result,result.engine);
 }
 export function saveSettings(settings) { localStorage.setItem('yapbook-settings', JSON.stringify(settings)); }
 let connection;

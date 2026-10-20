@@ -1,0 +1,7 @@
+# Generate the lock with --no-emit-package onnxruntime: both the CPU and GPU
+# distributions own the same Python module. Install the lock with --no-deps.
+kokoro-onnx==0.6.1
+onnxruntime-gpu[cuda,cudnn]==1.23.2
+numpy==2.3.5
+espeakng-loader==0.2.4
+phonemizer==3.4.0

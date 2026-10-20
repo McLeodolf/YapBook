@@ -1,2 +1,2 @@
 import { defineConfig } from 'vite';
-export default defineConfig({ base: './', build: { outDir: 'dist' } });
+export default defineConfig({ base: './', worker: {format:'es'}, server: {watch:{ignored:['**/test-output/**']}}, build: { outDir: 'dist' } });
