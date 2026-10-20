@@ -168,6 +168,8 @@ Run the local tests on Windows:
 
 These tests use generated sample text and do not call the online speech service. `tests/live/verify_live_follow.py`, `tests/live/verify_live_prefetch.py`, and `tests/live/verify_live_paragraphs.py` are separate, optional live checks using invented text and muted playback. After setting up Kokoro once in the app, `python -m tests.live.verify_live_prefetch --engine kokoro` checks real local GPU playback, five-ahead refill and five-back replay with no duplicate synthesis or online speech calls. Without this flag, the script checks the online engine. Run these probes as modules from the repository root so they can import the application package.
 
+The native Windows audio-device check runs separately with `python -m unittest tests.live.test_windows_audio -v`. It exercises real muted WAV playback, volume, pause/resume and seeking, so it needs a Windows desktop with an available audio device; hosted CI runners do not provide one.
+
 The web backend tests run from `web/` with `python -m unittest discover -s tests -v`.
 Frontend checks run from `web/frontend/` with `npm ci --ignore-scripts`,
 `npm run lint`, `npm test`, and `npm run test:browser`. Install Chromium first

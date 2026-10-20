@@ -4,6 +4,7 @@ import asyncio
 import gc
 from concurrent.futures import wait
 from pathlib import Path
+import queue
 import tempfile
 import tkinter as tk
 import threading
@@ -208,29 +209,63 @@ class WindowTests(unittest.TestCase):
     def test_five_ahead_refills_during_normal_playback_without_duplicate_requests(self):
         sentences = [f'Sentence number {i}.' for i in range(12)]
         self.use_chapters([('One', ' '.join(sentences))])
-        calls, release = [], threading.Event()
+        calls, started = [], queue.Queue()
+        releases = {text: threading.Event() for text in sentences}
 
         async def speech(text, voice, rate, cancelled, progress=None):
             calls.append(text)
-            if text == sentences[0]:
-                while not release.is_set():
-                    await asyncio.sleep(0.01)
+            started.put(text)
+            while not releases[text].is_set():
+                await asyncio.sleep(0.01)
             return text.encode(), [SentenceCue(0, 1000, 0, len(text))]
+
+        def next_request():
+            try:
+                return started.get(timeout=15)
+            except queue.Empty:
+                self.fail(f'No next synthesis request; started={calls}, '
+                          f'state={self.app.state}, queued={self.app.audio_jobs.qsize()}')
+
+        def deliver_results(count):
+            results = []
+            for _ in range(count):
+                try:
+                    results.append(self.app.results.get(timeout=15))
+                except queue.Empty:
+                    self.fail(f'Missing worker result: expected {count}, got {len(results)}; '
+                              f'started={calls}, state={self.app.state}')
+            for result in results:
+                self.assertIsNone(result[3], f'Worker failed for {result[1]}: {result[3]}')
+                self.app.results.put(result)
+            self.poll_once()
 
         with patch('yapbook.follow_reader.generate_audio', speech):
             try:
                 self.app.toggle_play()
-                self.wait_until(lambda: len(calls) == 6 and len(self.app.audio_cache) == 5)
+                self.assertCountEqual([next_request() for _ in range(6)], sentences[:6])
                 self.assertEqual(self.app.state, 'loading')
-                release.set()
-                self.wait_until(lambda: self.app.state == 'playing')
+                self.assertFalse(self.app.player.play_calls)
+                # Finish all five future requests while the current one is held.
+                for text in sentences[1:6]:
+                    releases[text].set()
+                deliver_results(5)
+                self.assertEqual(len(self.app.audio_cache), 5)
+                self.assertEqual(self.app.state, 'loading')
+                releases[sentences[0]].set()
+                deliver_results(1)
+                self.assertEqual(self.app.state, 'playing')
                 for index in range(1, len(sentences)):
                     self.app.player.state = 'stopped'
                     self.poll_once()
                     self.assertEqual(self.app.state, 'playing')
                     self.assertEqual(self.app.player.play_calls[-1], sentences[index].encode())
+                    next_index = index + 5
+                    if next_index < len(sentences):
+                        self.assertEqual(next_request(), sentences[next_index])
+                        releases[sentences[next_index]].set()
+                        deliver_results(1)
                     remaining = min(5, len(sentences) - index - 1)
-                    self.wait_until(lambda: len(self.app.audio_cache) == remaining)
+                    self.assertEqual(len(self.app.audio_cache), remaining)
                     self.assertCountEqual(calls, sentences[:min(index + 6, len(sentences))])
                     self.assertLessEqual(len(self.app.audio_requested), 11)
                 self.app.player.state = 'stopped'
@@ -238,8 +273,10 @@ class WindowTests(unittest.TestCase):
                 self.assertEqual(self.app.state, 'idle')
                 self.assertEqual(self.app.player.play_calls, [text.encode() for text in sentences])
                 self.assertCountEqual(calls, sentences)
+                self.assertTrue(started.empty())
             finally:
-                release.set()
+                for release in releases.values():
+                    release.set()
                 self.app.stop()
 
     def test_previous_five_sentences_play_immediately_across_sections_without_resynthesis(self):
