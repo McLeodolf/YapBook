@@ -1,0 +1,53 @@
+name: App tests
+
+on:
+  pull_request:
+    branches: [main, feat/streamlit-reader]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.14'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24.19.0'
+      - name: Install Python dependencies
+        run: python -m pip install --require-hashes --index-url https://pypi.org/simple -r requirements.txt -r web/requirements.txt
+      - name: Desktop tests
+        run: python -m unittest discover -s . -p "test_*.py" -v
+      - name: Web backend tests
+        working-directory: web
+        run: python -m unittest discover -s tests -v
+      - name: Install frontend dependencies
+        working-directory: web/frontend
+        run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
+      - name: Frontend lint
+        working-directory: web/frontend
+        run: npm run lint
+      - name: Frontend tests
+        working-directory: web/frontend
+        run: npm test
+      - name: Install browser
+        working-directory: web/frontend
+        run: npx --no-install playwright install chromium
+      - name: Browser tests
+        working-directory: web/frontend
+        run: npm run test:browser
+      - name: Build frontend
+        working-directory: web/frontend
+        run: npm run build

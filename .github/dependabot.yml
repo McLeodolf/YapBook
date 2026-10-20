@@ -4,11 +4,25 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 3
+      day: monday
+      time: "09:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 1
+    groups:
+      workflow-updates:
+        applies-to: version-updates
+        patterns: ["*"]
   - package-ecosystem: npm
     directory: /web/frontend
     schedule:
       interval: weekly
-    open-pull-requests-limit: 3
-# Python locks are regenerated as one reviewed resolution using uv; do not let
-# independent bots create divergent desktop/web/build/CI resolutions.
+      day: monday
+      time: "09:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 1
+    groups:
+      frontend-updates:
+        applies-to: version-updates
+        patterns: ["*"]
+# Security updates are separate; these groups only batch routine version updates.
+# Python runtime and EXE build requirements are updated together.

@@ -1,9 +1,9 @@
 $ErrorActionPreference = 'Stop'
 $readerPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $readerPython)) {
-    throw 'Please set up the Python environment as described in README.txt first.'
+    throw 'Please set up the Python environment as described in README.md first.'
 }
-& $readerPython -m pip install --require-hashes -r (Join-Path $PSScriptRoot 'quality\build.lock') --index-url https://pypi.org/simple
+& $readerPython -m pip install --require-hashes -r (Join-Path $PSScriptRoot 'requirements-build.txt') --index-url https://pypi.org/simple
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Push-Location -LiteralPath $PSScriptRoot
 try {
